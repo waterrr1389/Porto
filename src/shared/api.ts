@@ -82,6 +82,15 @@ export interface CardResponse {
   duplicates: number;
 }
 
+/**
+ * GET /api/cards/duplicates?term=<a>&term=<b> — how many notes in the deck
+ * already have each expression; at most `MAX_DUPLICATE_TERMS` terms. 502 when
+ * Anki is not reachable.
+ */
+export type DuplicatesResponse = Record<string, number>;
+
+export const MAX_DUPLICATE_TERMS = 20;
+
 /** GET /api/dictionaries */
 export type DictionariesResponse = DictionaryInfo[];
 

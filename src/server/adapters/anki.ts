@@ -16,6 +16,12 @@ export interface Anki {
   addNote(fields: Record<string, string>, media: { path: string; fileName: string }[], tags: string[]): Promise<number>;
   /** Ids of notes in the deck matching the query. */
   findNotes(query: string): Promise<number[]>;
+  /**
+   * Note ids for each query, in order, in the deck. One deck-scoped union
+   * query finds the candidates and, only when there are hits, one `multi`
+   * request counts each query among them (as Yomitan's findNoteIds does).
+   */
+  findNotesBatch(queries: string[]): Promise<number[][]>;
 }
 
 const ANKI_CONNECT_VERSION = 6;
@@ -89,14 +95,56 @@ export function createAnki(options: AnkiOptions): Anki {
   }
 
   async function findNotes(query: string): Promise<number[]> {
-    const result = await invoke('findNotes', { query: `"deck:${options.deck}" ${query}` });
-    if (!Array.isArray(result) || !result.every((id) => typeof id === 'number')) {
-      throw new Error('AnkiConnect findNotes returned no note ids');
-    }
-    return result as number[];
+    return noteIds(await invoke('findNotes', { query: `${deckScope()} ${query}` }), 'findNotes');
   }
 
-  return { addNote, findNotes };
+  async function findNotesBatch(queries: string[]): Promise<number[][]> {
+    if (queries.length === 0) return [];
+
+    const union = `${deckScope()} (${queries.join(' or ')})`;
+    const candidates = noteIds(await invoke('findNotes', { query: union }), 'findNotes');
+    // No candidate anywhere means every count is zero; one request is enough.
+    if (candidates.length === 0) return queries.map(() => []);
+    // With a single query the candidate list already is that query's answer.
+    if (queries.length === 1) return [candidates];
+
+    const filter = `nid:${candidates.join(',')}`;
+    const result = await invoke('multi', {
+      actions: queries.map((query) => ({ action: 'findNotes', params: { query: `${filter} (${query})` } })),
+    });
+    if (!Array.isArray(result) || result.length < queries.length) {
+      throw new Error('AnkiConnect multi returned no results');
+    }
+
+    const batches: number[][] = [];
+    for (let index = 0; index < queries.length; index++) {
+      batches.push(noteIds(multiItem(result[index]), 'multi'));
+    }
+    return batches;
+  }
+
+  function deckScope(): string {
+    return `"deck:${options.deck}"`;
+  }
+
+  return { addNote, findNotes, findNotesBatch };
+}
+
+function noteIds(value: unknown, action: string): number[] {
+  if (!Array.isArray(value) || !value.every((id) => typeof id === 'number')) {
+    throw new Error(`AnkiConnect ${action} returned no note ids`);
+  }
+  return value as number[];
+}
+
+/** AnkiConnect 6 wraps each `multi` result as `{result, error}`; older replies return raw results. */
+function multiItem(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const item = value as { result?: unknown; error?: unknown };
+  if (item.error !== undefined && item.error !== null && item.error !== '') {
+    throw new Error(`AnkiConnect findNotes failed: ${String(item.error)}`);
+  }
+  return 'result' in item ? item.result : value;
 }
 
 function messageOf(error: unknown): string {

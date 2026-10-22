@@ -73,8 +73,13 @@ export function lapisCard(input: CardInput, options: { audioPaddingS?: number } 
       screenshot: { time: input.time, fileName: screenshotFile },
       audio: { start: audioStart, end: audioEnd, fileName: audioFile },
     },
-    duplicateQuery: `Expression:${quotedTerm(input.term)}`,
+    duplicateQuery: duplicateQuery(input.term),
   };
+}
+
+/** Anki search for notes with this expression; the caller scopes it to its deck. */
+export function duplicateQuery(term: string): string {
+  return `Expression:"${term.replace(/[\\"*_]/g, (char) => `\\${char}`)}"`;
 }
 
 /** File-name stem for an episode: lower-case ASCII letters and digits only. */
@@ -204,11 +209,6 @@ function miscInfo(input: CardInput, formattedTime: string): string {
   const episode =
     input.episodeNumber === null ? input.episodeTitle : `EP${String(input.episodeNumber).padStart(2, '0')}`;
   return [series, episode, `(${formattedTime})`].filter((part) => part !== '').join(' ');
-}
-
-/** Anki search terms are wrapped in double quotes; specials are backslash-escaped. */
-function quotedTerm(term: string): string {
-  return `"${term.replace(/[\\"*_]/g, (char) => `\\${char}`)}"`;
 }
 
 function escapeText(text: string): string {

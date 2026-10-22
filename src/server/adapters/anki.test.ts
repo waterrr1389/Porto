@@ -118,3 +118,76 @@ test('reports a clear error when Anki is not running', async () => {
   const anki = createAnki({ url, apiKey: null, deck: 'JP', model: 'Lapis' });
   await assert.rejects(anki.addNote({}, [], []), /Anki is not reachable/);
 });
+
+test('returns zero counts from one union query when nothing matches', async () => {
+  const server = await fakeAnki(() => ({ result: [], error: null }));
+  try {
+    const anki = createAnki({ url: server.url, apiKey: null, deck: 'JP::Mining', model: 'Lapis' });
+    assert.deepEqual(await anki.findNotesBatch(['Expression:"自腹"', 'Expression:"腹"']), [[], []]);
+    assert.deepEqual(
+      server.requests.map((request) => request.action),
+      ['findNotes'],
+    );
+    assert.deepEqual(server.requests[0]?.params, {
+      query: '"deck:JP::Mining" (Expression:"自腹" or Expression:"腹")',
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test('counts each query among the union candidates with one multi request', async () => {
+  const server = await fakeAnki((request) => {
+    if (request.action === 'findNotes') return { result: [10, 11, 12], error: null };
+    // Mix both reply shapes: wrapped (version 6) and raw.
+    return { result: [{ result: [10, 11], error: null }, [12]], error: null };
+  });
+  try {
+    const anki = createAnki({ url: server.url, apiKey: null, deck: 'JP::Mining', model: 'Lapis' });
+    assert.deepEqual(await anki.findNotesBatch(['Expression:"自腹"', 'Expression:"腹"']), [[10, 11], [12]]);
+
+    assert.deepEqual(
+      server.requests.map((request) => request.action),
+      ['findNotes', 'multi'],
+    );
+    assert.equal(
+      server.requests[0]?.params.query,
+      '"deck:JP::Mining" (Expression:"自腹" or Expression:"腹")',
+    );
+    const actions = server.requests[1]?.params.actions as { action: string; params: { query: string } }[];
+    assert.deepEqual(
+      actions.map((action) => action.params.query),
+      ['nid:10,11,12 (Expression:"自腹")', 'nid:10,11,12 (Expression:"腹")'],
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('answers a single query from the union without a multi request', async () => {
+  const server = await fakeAnki(() => ({ result: [7, 8], error: null }));
+  try {
+    const anki = createAnki({ url: server.url, apiKey: null, deck: 'JP', model: 'Lapis' });
+    assert.deepEqual(await anki.findNotesBatch(['Expression:"自腹"']), [[7, 8]]);
+    assert.deepEqual(
+      server.requests.map((request) => request.action),
+      ['findNotes'],
+    );
+    assert.equal(server.requests[0]?.params.query, '"deck:JP" (Expression:"自腹")');
+  } finally {
+    await server.close();
+  }
+});
+
+test('rejects when a multi item reports an error', async () => {
+  const server = await fakeAnki((request) => {
+    if (request.action === 'findNotes') return { result: [10], error: null };
+    return { result: [{ result: [10], error: null }, { result: null, error: 'bad query' }], error: null };
+  });
+  try {
+    const anki = createAnki({ url: server.url, apiKey: null, deck: 'JP', model: 'Lapis' });
+    await assert.rejects(anki.findNotesBatch(['Expression:"自腹"', 'Expression:"腹"']), /bad query/);
+  } finally {
+    await server.close();
+  }
+});

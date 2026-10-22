@@ -8,11 +8,13 @@ import { playerTracks, resumeEpisode, type LibraryEpisode, type LibrarySeries } 
 import { decideRange } from '../core/range.ts';
 import { subtitleFormat } from '../core/subtitles.ts';
 import {
+  MAX_DUPLICATE_TERMS,
   MAX_LOOKUP_LENGTH,
   type ApiError,
   type CardRequest,
   type CardResponse,
   type DictionariesResponse,
+  type DuplicatesResponse,
   type EpisodeResponse,
   type LibraryResponse,
   type LookupResponse,
@@ -52,6 +54,8 @@ export interface MediaService {
 
 export interface CardService {
   mine(request: CardRequest): Promise<CardResponse>;
+  /** Counts, per expression, the notes in the deck that already use it. */
+  duplicates(terms: string[]): Promise<DuplicatesResponse>;
 }
 
 export interface HttpServices {
@@ -140,6 +144,11 @@ async function route(services: HttpServices, req: IncomingMessage, res: ServerRe
   if (path === '/api/cards') {
     expectMethod(method, 'POST');
     return createCard(services, req, res);
+  }
+
+  if (path === '/api/cards/duplicates') {
+    expectMethod(method, 'GET');
+    return findDuplicates(services, url, res);
   }
 
   if (!path.startsWith('/api/')) {
@@ -251,6 +260,25 @@ async function createCard(services: HttpServices, req: IncomingMessage, res: Ser
     throw error;
   }
   return sendJson<CardResponse>(res, 200, response);
+}
+
+async function findDuplicates(services: HttpServices, url: URL, res: ServerResponse): Promise<void> {
+  const terms = url.searchParams.getAll('term');
+  if (terms.length === 0) throw new HttpError(400, 'term is required');
+  if (terms.length > MAX_DUPLICATE_TERMS) throw new HttpError(400, `at most ${MAX_DUPLICATE_TERMS} terms`);
+  if (terms.some((term) => term === '')) throw new HttpError(400, 'term must not be empty');
+  if (terms.some((term) => term.length > MAX_LOOKUP_LENGTH)) {
+    throw new HttpError(400, `term must be at most ${MAX_LOOKUP_LENGTH} characters`);
+  }
+
+  let response: DuplicatesResponse;
+  try {
+    response = await services.cards.duplicates(terms);
+  } catch (error) {
+    if (error instanceof AnkiFailure) throw new HttpError(502, error.message);
+    throw error;
+  }
+  return sendJson<DuplicatesResponse>(res, 200, response);
 }
 
 function parseCardRequest(body: unknown): CardRequest {

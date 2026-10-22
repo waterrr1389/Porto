@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lapisCard, type CardInput } from './card.ts';
+import { duplicateQuery, lapisCard, type CardInput } from './card.ts';
 
 const LAPIS_FIELDS = [
   'Expression',
@@ -255,6 +255,12 @@ test('quotes and escapes the duplicate query', () => {
     lapisCard(withInput({ term: 'a"b*c_d\\e' })).duplicateQuery,
     'Expression:"a\\"b\\*c\\_d\\\\e"',
   );
+});
+
+test('exports the duplicate query used by the card and the duplicate counts', () => {
+  assert.equal(duplicateQuery('自腹'), 'Expression:"自腹"');
+  assert.equal(duplicateQuery('a"b*c_d\\e'), 'Expression:"a\\"b\\*c\\_d\\\\e"');
+  assert.equal(lapisCard(BASE).duplicateQuery, duplicateQuery(BASE.term));
 });
 
 test('leaves unused fields empty', () => {

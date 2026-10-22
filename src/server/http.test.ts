@@ -13,7 +13,14 @@ import { createMediaCache } from './adapters/media/index.ts';
 import { openStore } from './adapters/store.ts';
 import { createHandler, type DictionaryService } from './http.ts';
 import { createMiner } from './mining.ts';
-import type { CardRequest, CardResponse, EpisodeResponse, LibraryResponse, LookupResponse } from '../shared/api.ts';
+import type {
+  CardRequest,
+  CardResponse,
+  DuplicatesResponse,
+  EpisodeResponse,
+  LibraryResponse,
+  LookupResponse,
+} from '../shared/api.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'sla-http-'));
 const publicDir = join(dir, 'public');
@@ -36,6 +43,10 @@ let ankiServer: Server;
 let cardLibrary: ReturnType<typeof createLibrary>;
 let cardStore: ReturnType<typeof openStore>;
 let existingNotes: number[] = [];
+/** When set, answers findNotes per request instead of using `existingNotes`. */
+let findNotesFor: ((query: string) => number[]) | null = null;
+/** When set, answers each `multi` action's findNotes query. */
+let multiFor: ((queries: string[]) => number[][]) | null = null;
 const ankiRequests: AnkiRequest[] = [];
 const storedMedia: { fileName: string; path: string; existed: boolean }[] = [];
 
@@ -81,7 +92,7 @@ before(async () => {
     prewarm: (key: string) => void prewarmed.push(key),
   };
   const library = createLibrary([root]);
-  const cards = { mine: async () => ({ noteId: 0, duplicates: 0 }) };
+  const cards = { mine: async () => ({ noteId: 0, duplicates: 0 }), duplicates: async () => ({}) };
   server = createServer(createHandler({ dictionary, library, progress: store, media, cards, publicDir }));
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
@@ -133,7 +144,12 @@ before(async () => {
       ankiRequests.push(body);
       let result: unknown = null;
       if (body.action === 'findNotes') {
-        result = existingNotes;
+        result = findNotesFor ? findNotesFor(String(body.params.query)) : existingNotes;
+      } else if (body.action === 'multi') {
+        const actions = (body.params.actions ?? []) as { params: { query: string } }[];
+        const queries = actions.map((action) => String(action.params.query));
+        const batches = multiFor ? multiFor(queries) : [];
+        result = queries.map((_, index) => ({ result: batches[index] ?? [], error: null }));
       } else if (body.action === 'addNote') {
         result = 777;
       } else if (body.action === 'storeMediaFile') {
@@ -308,6 +324,8 @@ function resetAnki(): void {
   ankiRequests.length = 0;
   storedMedia.length = 0;
   existingNotes = [];
+  findNotesFor = null;
+  multiFor = null;
 }
 
 function postCard(baseUrl: string, body: unknown): Promise<Response> {
@@ -387,6 +405,41 @@ test('reports how many notes with the expression already exist', async () => {
   assert.deepEqual((await res.json()) as CardResponse, { noteId: 777, duplicates: 2 });
 });
 
+test('counts duplicate notes for each distinct term', async () => {
+  resetAnki();
+  // The union finds both candidate notes; only 自腹 has any.
+  findNotesFor = () => [1, 2];
+  multiFor = (queries) => queries.map((query) => (query.includes('Expression:"自腹"') ? [1, 2] : []));
+  const terms = ['自腹', '腹', '自腹'];
+  const query = terms.map((term) => `term=${encodeURIComponent(term)}`).join('&');
+  const res = await fetch(`${cardBase}/api/cards/duplicates?${query}`);
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()) as DuplicatesResponse, { '自腹': 2, '腹': 0 });
+
+  assert.deepEqual(
+    ankiRequests.map((request) => request.action),
+    ['findNotes', 'multi'],
+  );
+  assert.equal(
+    ankiRequests[0]?.params.query,
+    `"deck:${cardStore.config.anki.deck}" (Expression:"自腹" or Expression:"腹")`,
+  );
+  const actions = ankiRequests[1]?.params.actions as { action: string; params: { query: string } }[];
+  assert.deepEqual(
+    actions.map((action) => action.params.query),
+    ['nid:1,2 (Expression:"自腹")', 'nid:1,2 (Expression:"腹")'],
+  );
+});
+
+test('rejects invalid duplicate term lists', async () => {
+  const duplicatesUrl = (query: string) => `${cardBase}/api/cards/duplicates${query}`;
+  assert.equal((await fetch(duplicatesUrl(''))).status, 400);
+  assert.equal((await fetch(duplicatesUrl('?term='))).status, 400);
+  assert.equal((await fetch(duplicatesUrl(`?term=${encodeURIComponent('あ'.repeat(65))}`))).status, 400);
+  const many = Array.from({ length: 21 }, (_, index) => `term=${index}`).join('&');
+  assert.equal((await fetch(duplicatesUrl(`?${many}`))).status, 400);
+});
+
 test('accepts card bodies larger than the progress limit', async () => {
   resetAnki();
   const html = `<span>${'x'.repeat(8000)}</span>`;
@@ -451,10 +504,15 @@ test('returns 502 when Anki cannot be reached', async () => {
   assert.ok(downAddress && typeof downAddress === 'object');
 
   try {
-    const res = await postCard(`http://127.0.0.1:${downAddress.port}`, { ...CARD, episodeId: cardEpisodeId });
+    const baseUrl = `http://127.0.0.1:${downAddress.port}`;
+    const res = await postCard(baseUrl, { ...CARD, episodeId: cardEpisodeId });
     assert.equal(res.status, 502);
     const body = (await res.json()) as { error: string };
     assert.match(body.error, /Anki is not reachable/);
+
+    const duplicates = await fetch(`${baseUrl}/api/cards/duplicates?term=${encodeURIComponent('自腹')}`);
+    assert.equal(duplicates.status, 502);
+    assert.match(((await duplicates.json()) as { error: string }).error, /Anki is not reachable/);
   } finally {
     await new Promise<void>((done) => downServer.close(() => done()));
   }

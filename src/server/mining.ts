@@ -4,7 +4,7 @@
 // copied the files into its collection.
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { lapisCard } from '../core/card.ts';
+import { duplicateQuery, lapisCard } from '../core/card.ts';
 import type { CardRequest, CardResponse } from '../shared/api.ts';
 import type { Anki } from './adapters/anki.ts';
 import type { Library } from './adapters/library.ts';
@@ -22,6 +22,8 @@ export interface MinerOptions {
 
 export interface Miner {
   mine(request: CardRequest): Promise<CardResponse>;
+  /** Counts, per distinct term, the notes in the deck with that expression. */
+  duplicates(terms: string[]): Promise<Record<string, number>>;
 }
 
 /** The episode id in the request does not exist in the library. */
@@ -75,10 +77,10 @@ export function createMiner(options: MinerOptions): Miner {
           options.media.audioClip(located.videoPath, plan.media.audio.start, plan.media.audio.end, audioPath),
         ]);
 
-        let duplicates: number;
+        let duplicateCount: number;
         let noteId: number;
         try {
-          duplicates = (await options.anki.findNotes(plan.duplicateQuery)).length;
+          duplicateCount = (await options.anki.findNotes(plan.duplicateQuery)).length;
           noteId = await options.anki.addNote(plan.fields, media, ['sla']);
         } catch (error) {
           throw new AnkiFailure(error instanceof Error ? error.message : String(error));
@@ -90,10 +92,22 @@ export function createMiner(options: MinerOptions): Miner {
           episodeId: located.episode.id,
           time: request.time,
         });
-        return { noteId, duplicates };
+        return { noteId, duplicates: duplicateCount };
       } finally {
         await rm(cardDir, { recursive: true, force: true });
       }
+    },
+
+    async duplicates(terms) {
+      const distinct = [...new Set(terms)];
+      let counts: number[][];
+      try {
+        counts = await options.anki.findNotesBatch(distinct.map((term) => duplicateQuery(term)));
+      } catch (error) {
+        throw new AnkiFailure(error instanceof Error ? error.message : String(error));
+      }
+      // fromEntries keeps unusual expressions such as "__proto__" as own keys.
+      return Object.fromEntries(distinct.map((term, index) => [term, (counts[index] ?? []).length]));
     },
   };
 }
