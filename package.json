@@ -7,11 +7,16 @@
   },
   "scripts": {
     "check": "tsc -p tsconfig.json",
-    "test": "node --test \"src/**/*.test.ts\" \"test/**/*.test.ts\""
+    "test": "node --test \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
+    "build:yomitan": "node scripts/build-yomitan-libs.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
+    "@zip.js/zip.js": "2.7.54",
+    "ajv": "8.20.0",
     "esbuild": "0.28.2",
+    "hangul-js": "0.2.6",
+    "kanji-processor": "1.0.2",
     "typescript": "7.0.2"
   }
 }

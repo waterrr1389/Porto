@@ -1,0 +1,3 @@
+[submodule "vendor/yomitan"]
+	path = vendor/yomitan
+	url = https://github.com/yomidevs/yomitan.git
