@@ -8,7 +8,9 @@
   "scripts": {
     "check": "tsc -p tsconfig.json",
     "test": "node --test \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
-    "build:yomitan": "node scripts/build-yomitan-libs.ts"
+    "build:yomitan": "node scripts/build-yomitan-libs.ts",
+    "start": "node src/server/main.ts",
+    "import-dicts": "node scripts/import-dicts.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

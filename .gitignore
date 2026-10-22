@@ -12,6 +12,7 @@ dicts/
 cache/
 state/
 vendor-build/
+dist/
 *.tmp
 *.log
 
