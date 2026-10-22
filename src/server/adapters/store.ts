@@ -1,7 +1,8 @@
-// Durable user state under state/: config and playback positions. These
+// Durable user state under state/: config, playback positions and the
+// history of mined cards. These
 // cannot be rebuilt, so writes go to a temporary file that is renamed over the
 // old one, and the program never deletes them.
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface Config {
@@ -9,6 +10,25 @@ export interface Config {
   mediaRoots: string[];
   /** Upper bound for remuxed episodes in cache/, in gigabytes. */
   cacheLimitGB: number;
+  anki: AnkiConfig;
+}
+
+export interface AnkiConfig {
+  /** AnkiConnect endpoint on this machine. */
+  url: string;
+  /** AnkiConnect's apiKey setting, or null when it has none. */
+  apiKey: string | null;
+  deck: string;
+  /** A note type with the Lapis fields. */
+  model: string;
+}
+
+export interface MinedCard {
+  noteId: number;
+  term: string;
+  episodeId: string;
+  /** Playback time of the lookup, in seconds. */
+  time: number;
 }
 
 export interface Progress {
@@ -26,11 +46,14 @@ export interface Store {
   /** All positions, for finding the most recently watched episode. */
   allProgress(): ReadonlyMap<string, Progress>;
   saveProgress(episodeId: string, position: number, duration: number): void;
+  /** Appends to state/cards.jsonl, one JSON object per line with the time it was mined. */
+  recordCard(card: MinedCard): void;
 }
 
 export const DEFAULT_CONFIG: Config = {
   mediaRoots: ['/srv/anime'],
   cacheLimitGB: 50,
+  anki: { url: 'http://127.0.0.1:8765', apiKey: null, deck: 'JP::Mining', model: 'Lapis' },
 };
 
 /**
@@ -44,7 +67,11 @@ export function openStore(dir: string): Store {
 
   const storedConfig = readJson<Partial<Config>>(configPath);
   if (storedConfig === null) writeJsonAtomic(configPath, DEFAULT_CONFIG);
-  const config: Config = { ...DEFAULT_CONFIG, ...storedConfig };
+  const config: Config = {
+    ...DEFAULT_CONFIG,
+    ...storedConfig,
+    anki: { ...DEFAULT_CONFIG.anki, ...storedConfig?.anki },
+  };
 
   const positions = new Map(Object.entries(readJson<Record<string, Progress>>(progressPath) ?? {}));
 
@@ -55,6 +82,9 @@ export function openStore(dir: string): Store {
     saveProgress(episodeId, position, duration) {
       positions.set(episodeId, { position, duration, updatedAt: Date.now() });
       writeJsonAtomic(progressPath, Object.fromEntries(positions));
+    },
+    recordCard(card) {
+      appendFileSync(join(dir, 'cards.jsonl'), `${JSON.stringify({ ...card, minedAt: new Date().toISOString() })}\n`);
     },
   };
 }

@@ -9,12 +9,15 @@ import { decideRange } from '../core/range.ts';
 import {
   MAX_LOOKUP_LENGTH,
   type ApiError,
+  type CardRequest,
+  type CardResponse,
   type DictionariesResponse,
   type EpisodeResponse,
   type LibraryResponse,
   type LookupResponse,
   type ProgressRequest,
 } from '../shared/api.ts';
+import { AnkiFailure, EpisodeNotFound } from './mining.ts';
 
 export interface DictionaryService {
   dictionaries(): DictionariesResponse;
@@ -45,11 +48,16 @@ export interface MediaService {
   prewarm(key: string, source: string): void;
 }
 
+export interface CardService {
+  mine(request: CardRequest): Promise<CardResponse>;
+}
+
 export interface HttpServices {
   dictionary: DictionaryService;
   library: LibraryService;
   progress: ProgressService;
   media: MediaService;
+  cards: CardService;
   /** Client files: index.html and the bundle. */
   publicDir: string;
 }
@@ -71,6 +79,8 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 const MAX_BODY_BYTES = 4096;
+/** Card bodies carry the rendered definition HTML, so they are much larger. */
+const MAX_CARD_BODY_BYTES = 2 * 1024 * 1024;
 
 class HttpError extends Error {
   readonly status: number;
@@ -123,6 +133,11 @@ async function route(services: HttpServices, req: IncomingMessage, res: ServerRe
       return sendPath(req, res, file);
     }
     return sendJson<EpisodeResponse>(res, 200, describeEpisode(services, located));
+  }
+
+  if (path === '/api/cards') {
+    expectMethod(method, 'POST');
+    return createCard(services, req, res);
   }
 
   if (!path.startsWith('/api/')) {
@@ -216,12 +231,109 @@ async function saveProgress(services: HttpServices, req: IncomingMessage, res: S
   res.writeHead(204).end();
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+async function createCard(services: HttpServices, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const request = parseCardRequest(await readJson(req, MAX_CARD_BODY_BYTES));
+  let response: CardResponse;
+  try {
+    response = await services.cards.mine(request);
+  } catch (error) {
+    if (error instanceof EpisodeNotFound) throw new HttpError(404, 'unknown episode');
+    // The miner only uses this error type for failures AnkiConnect reported,
+    // so its message is the useful one to show the user.
+    if (error instanceof AnkiFailure) throw new HttpError(502, error.message);
+    throw error;
+  }
+  return sendJson<CardResponse>(res, 200, response);
+}
+
+function parseCardRequest(body: unknown): CardRequest {
+  if (!isRecord(body)) throw new HttpError(400, 'card must be a json object');
+
+  const episodeId = requireString(body.episodeId, 'episodeId');
+  if (episodeId === '') throw new HttpError(400, 'episodeId must not be empty');
+  const term = requireString(body.term, 'term');
+  if (term === '') throw new HttpError(400, 'term must not be empty');
+
+  const definitions = requireArray(body.definitions, 'definitions').map((entry) => {
+    if (!isRecord(entry)) throw new HttpError(400, 'definitions must contain objects');
+    return {
+      dictionary: requireString(entry.dictionary, 'definitions[].dictionary'),
+      html: requireString(entry.html, 'definitions[].html'),
+    };
+  });
+  const frequencies = requireArray(body.frequencies, 'frequencies').map((entry) => {
+    if (!isRecord(entry)) throw new HttpError(400, 'frequencies must contain objects');
+    return {
+      dictionary: requireString(entry.dictionary, 'frequencies[].dictionary'),
+      value: requireString(entry.value, 'frequencies[].value'),
+    };
+  });
+  const pitches = requireArray(body.pitches, 'pitches').map((pitch, index) =>
+    requireNumber(pitch, `pitches[${index}]`),
+  );
+
+  if (!isRecord(body.cue)) throw new HttpError(400, 'cue must be an object');
+  const cue = {
+    start: requireNumber(body.cue.start, 'cue.start'),
+    end: requireNumber(body.cue.end, 'cue.end'),
+    text: requireString(body.cue.text, 'cue.text'),
+  };
+  if (cue.start < 0 || cue.end < cue.start) throw new HttpError(400, 'cue must be a non-negative time span');
+
+  if (!isRecord(body.highlight)) throw new HttpError(400, 'highlight must be an object');
+  const highlight = {
+    start: requireNumber(body.highlight.start, 'highlight.start'),
+    end: requireNumber(body.highlight.end, 'highlight.end'),
+  };
+  const inCue =
+    Number.isInteger(highlight.start) &&
+    Number.isInteger(highlight.end) &&
+    highlight.start >= 0 &&
+    highlight.start <= highlight.end &&
+    highlight.end <= cue.text.length;
+  if (!inCue) throw new HttpError(400, 'highlight must be a range inside cue.text');
+
+  const time = requireNumber(body.time, 'time');
+  if (time < 0) throw new HttpError(400, 'time must not be negative');
+
+  return {
+    episodeId,
+    term,
+    reading: requireString(body.reading, 'reading'),
+    definitions,
+    frequencies,
+    pitches,
+    cue,
+    highlight,
+    time,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requireString(value: unknown, name: string): string {
+  if (typeof value !== 'string') throw new HttpError(400, `${name} must be a string`);
+  return value;
+}
+
+function requireNumber(value: unknown, name: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new HttpError(400, `${name} must be a number`);
+  return value;
+}
+
+function requireArray(value: unknown, name: string): unknown[] {
+  if (!Array.isArray(value)) throw new HttpError(400, `${name} must be an array`);
+  return value;
+}
+
+async function readJson(req: IncomingMessage, limitBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'body too large');
+    if (size > limitBytes) throw new HttpError(413, 'body too large');
     chunks.push(chunk);
   }
   try {

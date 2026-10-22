@@ -44,7 +44,8 @@ before(async () => {
   const library = { series: async () => [], episode: async () => null };
   const progress = { progress: () => null, allProgress: () => new Map(), saveProgress: () => {} };
   const media = { prepare: async () => '', prewarm: () => {} };
-  server = createServer(createHandler({ dictionary, library, progress, media, publicDir: dir }));
+  const cards = { mine: async () => ({ noteId: 0, duplicates: 0 }) };
+  server = createServer(createHandler({ dictionary, library, progress, media, cards, publicDir: dir }));
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   assert.ok(address && typeof address === 'object');

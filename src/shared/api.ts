@@ -52,6 +52,30 @@ export interface ProgressRequest {
   duration: number;
 }
 
+/**
+ * POST /api/cards — creates an Anki note for a looked-up word in the cue it
+ * was found in. Definition HTML is rendered by the client.
+ */
+export interface CardRequest {
+  episodeId: string;
+  term: string;
+  reading: string;
+  definitions: { dictionary: string; html: string }[];
+  frequencies: { dictionary: string; value: string }[];
+  pitches: number[];
+  cue: { start: number; end: number; text: string };
+  /** Code-unit range of the looked-up text inside `cue.text`. */
+  highlight: { start: number; end: number };
+  /** Playback time of the lookup, in seconds; the screenshot is taken there. */
+  time: number;
+}
+
+export interface CardResponse {
+  noteId: number;
+  /** Notes with the same expression that already existed in the deck. */
+  duplicates: number;
+}
+
 /** GET /api/dictionaries */
 export type DictionariesResponse = DictionaryInfo[];
 

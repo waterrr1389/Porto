@@ -56,6 +56,7 @@ depend on each other only through this file.
 |---|---|
 | `main.ts` | Reads config, constructs adapters, starts HTTP. Wiring only. |
 | `http` | Maps routes to adapter and core calls; validation and status codes. No domain logic. |
+| `mining.ts` | Creating a card: captures media, checks duplicates and adds the note through the adapters, using `core/card`. |
 | `adapters/library` | Scans the media roots, keeps the episode index (via `core/library`). |
 | `adapters/media` | ffmpeg: whole-episode remux into `cache/` on first request, screenshots, audio clips; LRU cache. |
 | `adapters/dictionary` | Yomitan importer and translator over a SQLite store. |
