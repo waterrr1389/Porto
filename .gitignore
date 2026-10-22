@@ -2,8 +2,8 @@
 node_modules/
 
 # Local data: media, dictionaries and their imported databases
-media/
-dicts/
+/media/
+/dicts/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
