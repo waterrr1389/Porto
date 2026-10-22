@@ -77,6 +77,45 @@ export function buildLibrary(rootName: string, files: readonly string[]): Librar
   return series.sort((a, b) => naturalCompare(a.title, b.title) || naturalCompare(a.directory, b.directory));
 }
 
+/** The subtitle shown for each player track: Japanese, and Simplified Chinese before Traditional. */
+export function playerTracks(subtitles: Readonly<Record<string, string>>): { ja?: string; zh?: string } {
+  const tracks: { ja?: string; zh?: string } = {};
+  const ja = subtitles.ja;
+  const zh = subtitles.zh ?? subtitles['zh-Hant'];
+  if (ja !== undefined) tracks.ja = ja;
+  if (zh !== undefined) tracks.zh = zh;
+  return tracks;
+}
+
+/** An episode counts as finished once fewer than this many seconds remain. */
+const FINISHED_REMAINING_S = 90;
+
+/**
+ * The episode to offer for resuming: the most recently updated one that is
+ * not finished, or else the episode after the most recently finished one.
+ * `progress` maps episode ids to positions; ids not in `series` are ignored.
+ */
+export function resumeEpisode(
+  series: readonly LibrarySeries[],
+  progress: ReadonlyMap<string, { position: number; duration: number; updatedAt: number }>,
+): { series: LibrarySeries; episode: LibraryEpisode; position: number } | null {
+  type Candidate = { series: LibrarySeries; index: number; updatedAt: number; finished: boolean; position: number };
+  let latest: Candidate | null = null;
+  for (const s of series) {
+    for (const [index, episode] of s.episodes.entries()) {
+      const p = progress.get(episode.id);
+      if (!p || (latest !== null && latest.updatedAt >= p.updatedAt)) continue;
+      const finished = p.duration > 0 && p.duration - p.position < FINISHED_REMAINING_S;
+      latest = { series: s, index, updatedAt: p.updatedAt, finished, position: p.position };
+    }
+  }
+  if (latest === null) return null;
+  const { series: s, index, finished, position } = latest;
+  if (!finished) return { series: s, episode: s.episodes[index] as LibraryEpisode, position };
+  const next = s.episodes[index + 1];
+  return next ? { series: s, episode: next, position: 0 } : null;
+}
+
 /**
  * Normalises a sidecar language tag: 'ja' (ja, jp, jpn, jap), 'zh' for
  * Simplified Chinese (sc, chs, zh, zh-Hans, zh-CN, gb, 简…), 'zh-Hant' for

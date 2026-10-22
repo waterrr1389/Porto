@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLibrary, cleanTitle, episodeNumber, stableId, subtitleLanguage } from './library.ts';
+import { buildLibrary, cleanTitle, episodeNumber, playerTracks, resumeEpisode, stableId, subtitleLanguage } from './library.ts';
 
 const bocchi = '[DMG&VCB-Studio] BOCCHI THE ROCK! [Ma10p_1080p]';
 const ep = (n: string) => `${bocchi}/[DMG&VCB-Studio] BOCCHI THE ROCK! [${n}][Ma10p_1080p][x265_flac]`;
@@ -93,4 +93,29 @@ test('titles lose release tags', () => {
   assert.equal(cleanTitle('[SweetSub&VCB-Studio] Oniichan ha Oshimai! [Ma10p_1080p]'), 'Oniichan ha Oshimai!');
   assert.equal(cleanTitle('[VCB-Studio] Karakai Jouzu no Takagi-san'), 'Karakai Jouzu no Takagi-san');
   assert.equal(cleanTitle('[only tags]'), '[only tags]');
+});
+
+test('player tracks prefer simplified chinese', () => {
+  assert.deepEqual(playerTracks({ ja: 'a', 'zh-Hant': 'b', zh: 'c', en: 'd' }), { ja: 'a', zh: 'c' });
+  assert.deepEqual(playerTracks({ 'zh-Hant': 'b' }), { zh: 'b' });
+  assert.deepEqual(playerTracks({ en: 'd' }), {});
+});
+
+test('resume offers the latest unfinished episode, or the one after a finished one', () => {
+  const series = buildLibrary('PT', ['s/Show - 01.mkv', 's/Show - 02.mkv', 't/Other - 01.mkv']);
+  const [show, other] = [series[0]!, series[1]!];
+  const [one, two] = [show.episodes[0]!, show.episodes[1]!];
+  const at = (position: number, duration: number, updatedAt: number) => ({ position, duration, updatedAt });
+
+  assert.equal(resumeEpisode(series, new Map()), null);
+  const unfinished = resumeEpisode(series, new Map([[one.id, at(300, 1400, 2)], [other.episodes[0]!.id, at(10, 1400, 1)]]));
+  assert.equal(unfinished?.episode.id, one.id);
+  assert.equal(unfinished?.position, 300);
+
+  const finished = resumeEpisode(series, new Map([[one.id, at(1380, 1400, 5)]]));
+  assert.equal(finished?.episode.id, two.id);
+  assert.equal(finished?.position, 0);
+
+  assert.equal(resumeEpisode(series, new Map([[two.id, at(1399, 1400, 5)]])), null);
+  assert.equal(resumeEpisode(series, new Map([['gone', at(1, 2, 9)]])), null);
 });

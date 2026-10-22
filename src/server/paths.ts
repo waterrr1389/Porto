@@ -14,6 +14,4 @@ export const paths = {
   dictionaryDatabase: join(root, 'cache', 'dictionaries.sqlite'),
   /** The bundled client. */
   public: join(root, 'dist'),
-  /** Prototype media until the library adapter serves episodes. */
-  media: join(root, 'media'),
 };

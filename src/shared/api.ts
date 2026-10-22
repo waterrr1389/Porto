@@ -5,6 +5,53 @@ export interface ApiError {
   error: string;
 }
 
+/** GET /api/library — every series, and the episode to offer for resuming. */
+export interface LibraryResponse {
+  series: SeriesSummary[];
+  /** Most recently watched episode that is not finished, if any. */
+  resume: { episodeId: string; seriesTitle: string; episodeTitle: string; position: number } | null;
+}
+
+export interface SeriesSummary {
+  id: string;
+  title: string;
+  episodes: EpisodeSummary[];
+}
+
+export interface EpisodeSummary {
+  id: string;
+  title: string;
+  /** Subtitle languages available as sidecar files, e.g. ["ja", "zh"]. */
+  languages: string[];
+  /** Saved position in seconds, 0 when never played. */
+  position: number;
+  /** Duration in seconds as last reported by the player, 0 when unknown. */
+  duration: number;
+}
+
+/**
+ * GET /api/episodes/<id> — everything the player needs. Requesting it starts
+ * preparing this episode's video and the next one's.
+ */
+export interface EpisodeResponse {
+  id: string;
+  title: string;
+  seriesTitle: string;
+  /** URL of the playable MP4 (GET with byte ranges). */
+  video: string;
+  /** URLs of the Japanese and Chinese subtitle files, when present. */
+  subtitles: { ja?: string; zh?: string };
+  /** Saved position in seconds. */
+  position: number;
+  nextEpisodeId: string | null;
+}
+
+/** PUT /api/episodes/<id>/progress — answered with 204. */
+export interface ProgressRequest {
+  position: number;
+  duration: number;
+}
+
 /** GET /api/dictionaries */
 export type DictionariesResponse = DictionaryInfo[];
 
