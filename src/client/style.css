@@ -6,6 +6,7 @@ html, body { margin: 0; height: 100%; background: #000; color: #fff;
   --panel-w: 0px; --panel-h: 0px; }
 #stage.panel-open.landscape { --panel-w: min(40%, 520px); }
 #stage.panel-open.portrait { --panel-h: 55%; }
+#view[hidden], #library-screen[hidden] { display: none; }
 
 /* The picture shrinks away from the panel instead of being covered by it. */
 #view { position: absolute; top: 0; left: 0; right: var(--panel-w); bottom: var(--panel-h);
@@ -59,6 +60,41 @@ details.dict[open] > summary::before { content: '▾ '; }
 .gloss li { margin: 2px 0; }
 .empty { color: #888; padding: 24px 0; text-align: center; }
 
+/* Library screen: large touch targets on a dark list. */
+#library-screen { position: absolute; inset: 0; z-index: 2; overflow-y: auto;
+  -webkit-overflow-scrolling: touch; background: #0c0c0f; color: #eee;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    calc(24px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.library-title { margin: 4px 0 16px; font-size: 22px; font-weight: 700; }
+.resume { display: block; width: 100%; text-align: left; border: 0; border-radius: 14px;
+  padding: 16px; margin-bottom: 20px; background: #1b2434; color: #fff; font: inherit;
+  min-height: 72px; }
+.resume:active { background: #223049; }
+.resume-label { display: block; font-size: 12px; color: #8fb3ff; margin-bottom: 4px; }
+.resume-title { display: block; font-size: 17px; font-weight: 600; }
+.resume-time { display: block; margin-top: 4px; font-size: 13px; color: #aab;
+  font-variant-numeric: tabular-nums; }
+.series { border-top: 1px solid #262630; }
+.series > summary { list-style: none; display: flex; align-items: center; gap: 10px;
+  padding: 16px 4px; font-size: 17px; font-weight: 600; cursor: pointer; min-height: 52px; }
+.series > summary::-webkit-details-marker { display: none; }
+.series > summary::after { content: '▾'; margin-left: auto; color: #778; transition: transform .2s; }
+.series:not([open]) > summary::after { transform: rotate(-90deg); }
+.series-title { flex: 1; }
+.series-count { font-size: 13px; color: #8a8a96; font-weight: 400; }
+.episodes { display: flex; flex-direction: column; gap: 8px; padding: 0 0 18px; }
+.episode { display: flex; flex-direction: column; gap: 8px; width: 100%; min-height: 56px;
+  padding: 12px 14px; border: 0; border-radius: 12px; background: #17171c; color: #e8e8ea;
+  text-align: left; font: inherit; }
+.episode:active { background: #202028; }
+.episode.no-ja { opacity: .55; }
+.episode-main { display: flex; align-items: center; gap: 8px; }
+.episode-title { flex: 1; font-size: 16px; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: #243244; color: #9cc0ff; }
+.progress { display: block; height: 4px; border-radius: 2px; background: #2a2a33; overflow: hidden; }
+.progress-fill { display: block; height: 100%; background: #2f6fed; }
+.lib-empty { color: #888; padding: 32px 0; text-align: center; }
+
 #bar { position: absolute; left: 0; right: 0; bottom: 0;
   padding: 10px max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   display: flex; gap: 12px; align-items: center;
@@ -67,6 +103,16 @@ details.dict[open] > summary::before { content: '▾ '; }
 #bar button { font-size: 20px; min-width: 48px; min-height: 48px; border: 0; border-radius: 24px;
   background: rgba(255,255,255,.15); color: #fff; }
 #bar button[hidden] { display: none; }
+#bar #library, #bar #next { font-size: 15px; padding: 0 12px; white-space: nowrap; }
 #seek { flex: 1; accent-color: #2f6fed; height: 32px; min-width: 0; }
 #time { font-variant-numeric: tabular-nums; font-size: 14px; color: #ccc; }
-#notice { position: absolute; top: 6px; left: 8px; font-size: 12px; color: #8f8; pointer-events: none; }
+#notice { position: absolute; top: 6px; left: 8px; font-size: 12px; color: #8f8; pointer-events: none;
+  z-index: 3; }
+
+/* Keep the player bar usable with the library and next-episode buttons on a phone. */
+@media (max-width: 500px) {
+  #bar { gap: 8px; padding-left: max(10px, env(safe-area-inset-left));
+    padding-right: max(10px, env(safe-area-inset-right)); }
+  #bar #library, #bar #next { font-size: 13px; padding: 0 8px; }
+  #time { font-size: 12px; }
+}

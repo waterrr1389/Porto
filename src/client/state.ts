@@ -6,9 +6,18 @@
 // user intent and discrete values derived from the element's events.
 import type { Cue } from '../core/subtitles.ts';
 import { highlightRange, scanText } from '../core/scan.ts';
-import { MAX_LOOKUP_LENGTH, type DictionaryInfo, type LookupResponse } from '../shared/api.ts';
+import {
+  MAX_LOOKUP_LENGTH,
+  type DictionaryInfo,
+  type EpisodeResponse,
+  type LibraryResponse,
+  type LookupResponse,
+} from '../shared/api.ts';
 
 export type Track = 'ja' | 'zh';
+
+/** The library list replaces the player until an episode is chosen. */
+export type Screen = 'library' | 'player';
 
 export interface Episode {
   video: string;
@@ -53,6 +62,15 @@ export interface LookupState {
 }
 
 export interface State {
+  screen: Screen;
+  /** The library listing; null until the first successful load. */
+  library: LibraryResponse | null;
+  /** Detail of the episode being played, including the next one's id. */
+  currentEpisode: EpisodeResponse | null;
+  /** Episode whose detail request is in flight; other responses are stale. */
+  choosingEpisodeId: string | null;
+  /** Saved position to seek to after the next metadata load; null once applied. */
+  pendingStartPosition: number | null;
   episode: Episode | null;
   /** Available dictionaries; kept across episodes. */
   dictionaries: DictionaryInfo[];
@@ -71,6 +89,14 @@ export interface State {
 
 export type Action =
   | { type: 'started' }
+  | { type: 'libraryLoaded'; library: LibraryResponse }
+  | { type: 'libraryFailed'; message: string }
+  | { type: 'episodeChosen'; episodeId: string }
+  | { type: 'episodeLoaded'; episode: EpisodeResponse }
+  | { type: 'episodeFailed'; message: string }
+  | { type: 'backToLibrary' }
+  | { type: 'nextEpisodeRequested' }
+  | { type: 'videoEnded' }
   | { type: 'episodeOpened'; episode: Episode }
   | { type: 'dictionariesLoaded'; dictionaries: DictionaryInfo[] }
   | { type: 'dictionariesFailed'; message: string }
@@ -96,12 +122,15 @@ export type Action =
   | { type: 'stallChecked'; readyState: number }
   | { type: 'timerFired'; timer: Timer };
 
-export type Timer = 'hideControls' | 'stall' | 'clearNotice';
+export type Timer = 'hideControls' | 'stall' | 'clearNotice' | 'saveProgress';
 
 export type Effect =
   | { type: 'loadVideo'; url: string }
   | { type: 'fetchSubtitles'; track: Track; url: string }
   | { type: 'fetchDictionaries' }
+  | { type: 'fetchLibrary' }
+  | { type: 'fetchEpisode'; id: string }
+  | { type: 'saveProgress'; episodeId: string }
   | { type: 'lookup'; seq: number; text: string }
   | { type: 'play' }
   | { type: 'pause' }
@@ -121,13 +150,22 @@ export interface Step {
 
 /** How long controls stay up after the last interaction while playing. */
 export const CONTROLS_HIDE_MS = 3000;
+/** How often the playback position is saved while playing. */
+export const SAVE_PROGRESS_MS = 10_000;
 /** A `waiting` longer than this without enough data reloads the source. */
 export const STALL_MS = 8000;
 /** readyState HAVE_FUTURE_DATA: below it the element cannot play on. */
 const HAVE_FUTURE_DATA = 3;
 const NOTICE_MS = 4000;
+const PREPARING_NOTICE = '准备中…';
+const ENDED_NOTICE = '本集结束，可播放下一集';
 
 export const initialState: State = {
+  screen: 'library',
+  library: null,
+  currentEpisode: null,
+  choosingEpisodeId: null,
+  pendingStartPosition: null,
   episode: null,
   dictionaries: [],
   cues: { ja: [], zh: [] },
@@ -149,20 +187,103 @@ export const initialState: State = {
 
 export function reduce(state: State, action: Action): Step {
   switch (action.type) {
-    case 'started':
-      return { state, effects: state.dictionaries.length === 0 ? [{ type: 'fetchDictionaries' }] : [] };
+    case 'started': {
+      const effects: Effect[] = [];
+      if (state.dictionaries.length === 0) effects.push({ type: 'fetchDictionaries' });
+      effects.push({ type: 'fetchLibrary' });
+      return { state, effects };
+    }
+
+    case 'libraryLoaded':
+      return only({ ...state, library: action.library });
+
+    case 'libraryFailed':
+      return notify(state, `library failed: ${action.message}`);
+
+    case 'episodeChosen':
+      return {
+        state: { ...state, choosingEpisodeId: action.episodeId },
+        effects: [{ type: 'fetchEpisode', id: action.episodeId }],
+      };
+
+    case 'episodeLoaded': {
+      if (action.episode.id !== state.choosingEpisodeId) return only(state);
+      const episode: Episode = { video: action.episode.video, subtitles: action.episode.subtitles };
+      return {
+        state: {
+          ...initialState,
+          screen: 'player',
+          library: state.library,
+          dictionaries: state.dictionaries,
+          currentEpisode: action.episode,
+          episode,
+          pendingStartPosition: action.episode.position,
+          notice: PREPARING_NOTICE,
+        },
+        effects: [
+          { type: 'cancelTimer', timer: 'clearNotice' },
+          { type: 'cancelTimer', timer: 'saveProgress' },
+          ...openEpisodeEffects(episode),
+        ],
+      };
+    }
+
+    case 'episodeFailed':
+      return notify({ ...state, choosingEpisodeId: null }, `episode failed: ${action.message}`);
+
+    case 'backToLibrary': {
+      if (state.screen !== 'player') return only(state);
+      const effects: Effect[] = [{ type: 'pause' }];
+      if (state.currentEpisode !== null) effects.push({ type: 'saveProgress', episodeId: state.currentEpisode.id });
+      effects.push({ type: 'cancelTimer', timer: 'saveProgress' }, { type: 'fetchLibrary' });
+      return {
+        state: {
+          ...state,
+          screen: 'library',
+          choosingEpisodeId: null,
+          wantsPlay: false,
+          notice: null,
+          lookup: closedLookup(state.lookup),
+        },
+        effects,
+      };
+    }
+
+    case 'nextEpisodeRequested': {
+      const next = state.currentEpisode?.nextEpisodeId;
+      if (next === null || next === undefined) return only(state);
+      const effects: Effect[] = [];
+      if (state.currentEpisode !== null) effects.push({ type: 'saveProgress', episodeId: state.currentEpisode.id });
+      effects.push({ type: 'fetchEpisode', id: next });
+      return { state: { ...state, choosingEpisodeId: next }, effects };
+    }
+
+    case 'videoEnded': {
+      if (state.screen !== 'player') return only(state);
+      const effects: Effect[] = [
+        { type: 'cancelTimer', timer: 'saveProgress' },
+        { type: 'cancelTimer', timer: 'hideControls' },
+      ];
+      if (state.currentEpisode !== null) effects.push({ type: 'saveProgress', episodeId: state.currentEpisode.id });
+      const stopped: State = { ...state, wantsPlay: false, controlsShown: true };
+      if (state.currentEpisode?.nextEpisodeId) {
+        const notified = notify(stopped, ENDED_NOTICE);
+        return { state: notified.state, effects: [...effects, ...notified.effects] };
+      }
+      return { state: stopped, effects };
+    }
 
     case 'episodeOpened': {
       const { episode } = action;
-      const effects: Effect[] = [{ type: 'loadVideo', url: episode.video }];
-      for (const track of ['ja', 'zh'] as const) {
-        const url = episode.subtitles[track];
-        if (url) effects.push({ type: 'fetchSubtitles', track, url });
-      }
-      const lookup = initialState.lookup;
       return {
-        state: { ...initialState, episode, dictionaries: state.dictionaries, lookup },
-        effects,
+        state: {
+          ...initialState,
+          episode,
+          screen: 'player',
+          dictionaries: state.dictionaries,
+          library: state.library,
+        },
+        effects: openEpisodeEffects(episode),
       };
     }
 
@@ -231,17 +352,25 @@ export function reduce(state: State, action: Action): Step {
     case 'fullscreenToggled':
       return { state, effects: [{ type: 'toggleFullscreen' }] };
 
-    case 'videoPlayed':
+    case 'videoPlayed': {
       // Playing means the user took over; closing the panel must not pause again.
-      return showControls({ ...state, wantsPlay: true, lookup: { ...state.lookup, pausedByLookup: false } });
+      const shown = showControls({ ...state, wantsPlay: true, lookup: { ...state.lookup, pausedByLookup: false } });
+      return {
+        state: shown.state,
+        effects: [...shown.effects, { type: 'startTimer', timer: 'saveProgress', ms: SAVE_PROGRESS_MS }],
+      };
+    }
 
-    case 'videoPaused':
+    case 'videoPaused': {
       // Reloading pauses the element; that is not the user's intent.
       if (state.reloading) return only(state);
-      return {
-        state: { ...state, wantsPlay: false, controlsShown: true },
-        effects: [{ type: 'cancelTimer', timer: 'hideControls' }],
-      };
+      const effects: Effect[] = [
+        { type: 'cancelTimer', timer: 'hideControls' },
+        { type: 'cancelTimer', timer: 'saveProgress' },
+      ];
+      if (state.currentEpisode !== null) effects.push({ type: 'saveProgress', episodeId: state.currentEpisode.id });
+      return { state: { ...state, wantsPlay: false, controlsShown: true }, effects };
+    }
 
     case 'videoWaiting':
       return { state, effects: [{ type: 'startTimer', timer: 'stall', ms: STALL_MS }] };
@@ -253,9 +382,21 @@ export function reduce(state: State, action: Action): Step {
       if (state.reloading) return only(state);
       return reload(state, `media error ${action.code ?? '?'}, reloading`);
 
-    case 'videoMetadataLoaded':
-      if (!state.reloading) return only(state);
-      return { state: { ...state, reloading: false }, effects: state.wantsPlay ? [{ type: 'play' }] : [] };
+    case 'videoMetadataLoaded': {
+      const effects: Effect[] = [];
+      let next = state;
+      if (next.pendingStartPosition !== null) {
+        // Seek before resuming so the first frames come from the saved position.
+        effects.push({ type: 'seek', time: next.pendingStartPosition });
+        next = { ...next, pendingStartPosition: null };
+      }
+      if (next.reloading) {
+        next = { ...next, reloading: false };
+        if (next.wantsPlay) effects.push({ type: 'play' });
+      }
+      if (next.notice === PREPARING_NOTICE) next = { ...next, notice: null };
+      return { state: next, effects };
+    }
 
     case 'stallChecked':
       if (state.reloading || action.readyState >= HAVE_FUTURE_DATA) return only(state);
@@ -269,6 +410,15 @@ export function reduce(state: State, action: Action): Step {
           return { state, effects: [{ type: 'checkStall' }] };
         case 'clearNotice':
           return only({ ...state, notice: null });
+        case 'saveProgress': {
+          if (!state.wantsPlay) return only(state);
+          const effects: Effect[] = [];
+          if (state.currentEpisode !== null) {
+            effects.push({ type: 'saveProgress', episodeId: state.currentEpisode.id });
+          }
+          effects.push({ type: 'startTimer', timer: 'saveProgress', ms: SAVE_PROGRESS_MS });
+          return { state, effects };
+        }
       }
   }
 }
@@ -296,6 +446,28 @@ function reload(state: State, notice: string): Step {
 
 function sameIds(a: readonly number[], b: readonly number[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/** Loading an episode replaces the source and both subtitle tracks. */
+function openEpisodeEffects(episode: Episode): Effect[] {
+  const effects: Effect[] = [{ type: 'loadVideo', url: episode.video }];
+  for (const track of ['ja', 'zh'] as const) {
+    const url = episode.subtitles[track];
+    if (url) effects.push({ type: 'fetchSubtitles', track, url });
+  }
+  return effects;
+}
+
+function closedLookup(lookup: LookupState): LookupState {
+  return {
+    ...lookup,
+    pending: null,
+    history: [],
+    highlight: null,
+    panelOpen: false,
+    pausedByLookup: false,
+    pinnedJa: null,
+  };
 }
 
 /** A tap on a Japanese character: the scan text decides whether there is a lookup at all. */
@@ -359,18 +531,7 @@ function closePanel(state: State): Step {
   const { lookup } = state;
   if (!lookup.panelOpen) return only(state);
   return {
-    state: {
-      ...state,
-      lookup: {
-        ...lookup,
-        pending: null,
-        history: [],
-        highlight: null,
-        panelOpen: false,
-        pausedByLookup: false,
-        pinnedJa: null,
-      },
-    },
+    state: { ...state, lookup: closedLookup(lookup) },
     effects: lookup.pausedByLookup ? [{ type: 'play' }] : [],
   };
 }

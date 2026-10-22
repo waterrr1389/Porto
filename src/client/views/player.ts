@@ -13,6 +13,8 @@ export interface PlayerElements {
   seek: HTMLInputElement;
   time: HTMLElement;
   fullscreen: HTMLButtonElement;
+  library: HTMLButtonElement;
+  nextEpisode: HTMLButtonElement;
   notice: HTMLElement;
 }
 
@@ -33,6 +35,9 @@ export function createPlayerView(els: PlayerElements, dispatch: Dispatch, fullsc
   els.tapLayer.addEventListener('click', () => dispatch({ type: 'stageTapped' }));
   els.play.addEventListener('click', () => dispatch({ type: 'playToggled' }));
   els.fullscreen.addEventListener('click', () => dispatch({ type: 'fullscreenToggled' }));
+  els.library.addEventListener('click', () => dispatch({ type: 'backToLibrary' }));
+  els.nextEpisode.addEventListener('click', () => dispatch({ type: 'nextEpisodeRequested' }));
+  video.addEventListener('ended', () => dispatch({ type: 'videoEnded' }));
 
   let scrubbing = false;
   els.seek.max = String(SEEK_STEPS);
@@ -52,9 +57,15 @@ export function createPlayerView(els: PlayerElements, dispatch: Dispatch, fullsc
   requestAnimationFrame(frame);
 
   return function render(state: State): void {
+    els.view.hidden = state.screen !== 'player';
     els.bar.classList.toggle('hidden', !state.controlsShown);
     els.view.classList.toggle('bar-shown', state.controlsShown);
+    els.nextEpisode.hidden = state.currentEpisode?.nextEpisodeId == null;
     els.notice.textContent = state.notice ?? '';
+    document.title =
+      state.screen === 'player' && state.currentEpisode !== null
+        ? `${state.currentEpisode.seriesTitle} ${state.currentEpisode.title}`
+        : 'SLA';
   };
 }
 

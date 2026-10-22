@@ -1,7 +1,13 @@
 // Carries out Effects: network, video element commands, fullscreen and
 // timers. Results come back only as dispatched Actions.
 import { parseSubtitles } from '../core/subtitles.ts';
-import type { DictionaryInfo, LookupResponse } from '../shared/api.ts';
+import type {
+  DictionaryInfo,
+  EpisodeResponse,
+  LibraryResponse,
+  LookupResponse,
+  ProgressRequest,
+} from '../shared/api.ts';
 import type { Action, Effect, Timer } from './state.ts';
 
 export type Dispatch = (action: Action) => void;
@@ -45,6 +51,33 @@ export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Di
           .then((dictionaries) => dispatch({ type: 'dictionariesLoaded', dictionaries }))
           .catch((error: unknown) => dispatch({ type: 'dictionariesFailed', message: String(error) }));
         return;
+
+      case 'fetchLibrary':
+        getJson<LibraryResponse>('/api/library')
+          .then((library) => dispatch({ type: 'libraryLoaded', library }))
+          .catch((error: unknown) => dispatch({ type: 'libraryFailed', message: String(error) }));
+        return;
+
+      case 'fetchEpisode':
+        getJson<EpisodeResponse>(`/api/episodes/${encodeURIComponent(effect.id)}`)
+          .then((episode) => dispatch({ type: 'episodeLoaded', episode }))
+          .catch((error: unknown) => dispatch({ type: 'episodeFailed', message: String(error) }));
+        return;
+
+      case 'saveProgress': {
+        // The element is the source of truth; a reload can leave duration unknown.
+        const duration = video.duration;
+        const position = video.currentTime;
+        if (!Number.isFinite(position) || !Number.isFinite(duration) || position < 1) return;
+        const body: ProgressRequest = { position, duration };
+        // Progress is best effort: a failed save must not interrupt playback.
+        void fetch(`/api/episodes/${encodeURIComponent(effect.episodeId)}/progress`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }).catch(() => {});
+        return;
+      }
 
       case 'lookup':
         getJson<LookupResponse>(`/api/lookup?text=${encodeURIComponent(effect.text)}`)

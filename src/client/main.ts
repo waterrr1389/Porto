@@ -2,7 +2,8 @@
 // views render the state, then the effects run.
 import { activeCues } from '../core/subtitles.ts';
 import { canFullscreen, createEffectRunner } from './effects.ts';
-import { initialState, reduce, type Action, type Episode, type State } from './state.ts';
+import { initialState, reduce, type Action, type State } from './state.ts';
+import { createLibraryView } from './views/library.ts';
 import { createPlayerView } from './views/player.ts';
 import { createSubtitlesView } from './views/subtitles.ts';
 import { createPanelView } from './views/panel/index.ts';
@@ -57,11 +58,14 @@ const views = [
       seek: byId<HTMLInputElement>('seek'),
       time: byId('time'),
       fullscreen: byId<HTMLButtonElement>('fullscreen'),
+      library: byId<HTMLButtonElement>('library'),
+      nextEpisode: byId<HTMLButtonElement>('next'),
       notice: byId('notice'),
     },
     dispatch,
     canFullscreen(stage),
   ),
+  createLibraryView({ root: byId('library-screen') }, dispatch),
   createSubtitlesView({ ja: byId('ja'), zh: byId('zh') }, dispatch),
   createPanelView(
     {
@@ -77,11 +81,13 @@ const views = [
 
 // Dispatches only when the set of cues on screen changes, not every frame.
 function frame(): void {
-  for (const track of ['ja', 'zh'] as const) {
-    const ids = activeCues(state.cues[track], video.currentTime).map((cue) => cue.id);
-    const current = state.onScreen[track];
-    if (ids.length !== current.length || ids.some((id, i) => id !== current[i])) {
-      dispatch({ type: 'cuesOnScreen', track, ids });
+  if (state.screen === 'player') {
+    for (const track of ['ja', 'zh'] as const) {
+      const ids = activeCues(state.cues[track], video.currentTime).map((cue) => cue.id);
+      const current = state.onScreen[track];
+      if (ids.length !== current.length || ids.some((id, i) => id !== current[i])) {
+        dispatch({ type: 'cuesOnScreen', track, ids });
+      }
     }
   }
   requestAnimationFrame(frame);
@@ -94,13 +100,6 @@ new ResizeObserver(() => {
   stage.classList.toggle('portrait', !landscape);
 }).observe(stage);
 
-/** The prototype episode, until the library lists real ones. */
-const demoEpisode: Episode = {
-  video: '/media/ep06.mp4',
-  subtitles: { ja: '/media/ep06.ja.ass', zh: '/media/ep06.sc.ass' },
-};
-
 for (const render of views) render(state);
 dispatch({ type: 'started' });
-dispatch({ type: 'episodeOpened', episode: demoEpisode });
 requestAnimationFrame(frame);

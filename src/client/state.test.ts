@@ -1,8 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Cue } from '../core/subtitles.ts';
-import { MAX_LOOKUP_LENGTH } from '../shared/api.ts';
-import { CONTROLS_HIDE_MS, STALL_MS, initialState, reduce, type Action, type Effect, type State } from './state.ts';
+import { MAX_LOOKUP_LENGTH, type EpisodeResponse, type LibraryResponse } from '../shared/api.ts';
+import {
+  CONTROLS_HIDE_MS,
+  SAVE_PROGRESS_MS,
+  STALL_MS,
+  initialState,
+  reduce,
+  type Action,
+  type Effect,
+  type State,
+} from './state.ts';
 
 /** Applies actions in order, collecting every effect. */
 function run(state: State, ...actions: Action[]): { state: State; effects: Effect[] } {
@@ -115,13 +124,16 @@ const responses = {
   second: { matchLength: 1, entries: [] },
 };
 
-test('started fetches dictionaries once, and they survive opening an episode', () => {
-  assert.deepEqual(reduce(initialState, { type: 'started' }).effects, [{ type: 'fetchDictionaries' }]);
+test('started fetches dictionaries once and the library, and dictionaries survive opening an episode', () => {
+  assert.deepEqual(reduce(initialState, { type: 'started' }).effects, [
+    { type: 'fetchDictionaries' },
+    { type: 'fetchLibrary' },
+  ]);
 
   const dictionaries = [{ title: 'A', styles: '' }];
   const loaded = run(initialState, { type: 'started' }, { type: 'dictionariesLoaded', dictionaries });
   assert.equal(loaded.state.dictionaries, dictionaries);
-  assert.deepEqual(reduce(loaded.state, { type: 'started' }).effects, []);
+  assert.deepEqual(reduce(loaded.state, { type: 'started' }).effects, [{ type: 'fetchLibrary' }]);
 
   const reopened = run(loaded.state, { type: 'episodeOpened', episode }).state;
   assert.equal(reopened.dictionaries, dictionaries);
@@ -303,4 +315,204 @@ test('manual playback while the panel is open clears pausedByLookup but keeps th
   assert.equal(played.lookup.pausedByLookup, false);
   assert.equal(played.lookup.panelOpen, true);
   assert.deepEqual(reduce(played, { type: 'panelClosed' }).effects, []);
+});
+
+// ---------------------------------------------------------------- library
+
+const firstEpisode: EpisodeResponse = {
+  id: 'e1',
+  title: '第1话',
+  seriesTitle: 'Show',
+  video: '/api/episodes/e1/video',
+  subtitles: { ja: '/api/episodes/e1/subtitles/ja' },
+  position: 42,
+  nextEpisodeId: 'e2',
+};
+const secondEpisode: EpisodeResponse = {
+  ...firstEpisode,
+  id: 'e2',
+  title: '第2话',
+  position: 0,
+  nextEpisodeId: null,
+};
+const library: LibraryResponse = {
+  series: [
+    {
+      id: 's1',
+      title: 'Show',
+      episodes: [{ id: 'e1', title: '第1话', languages: ['ja'], position: 42, duration: 1400 }],
+    },
+  ],
+  resume: { episodeId: 'e1', seriesTitle: 'Show', episodeTitle: '第1话', position: 42 },
+};
+
+const choose = (response: EpisodeResponse, state: State = initialState): State =>
+  run(
+    state,
+    { type: 'episodeChosen', episodeId: response.id },
+    { type: 'episodeLoaded', episode: response },
+  ).state;
+
+test('the library is stored, and loading it can fail with a notice', () => {
+  const loaded = run(initialState, { type: 'started' }, { type: 'libraryLoaded', library });
+  assert.equal(loaded.state.library, library);
+
+  const failed = reduce(initialState, { type: 'libraryFailed', message: 'HTTP 500' });
+  assert.match(failed.state.notice ?? '', /library failed: HTTP 500/);
+});
+
+test('choosing an episode requests its detail and stays in the library meanwhile', () => {
+  const step = reduce(initialState, { type: 'episodeChosen', episodeId: 'e1' });
+  assert.deepEqual(step.effects, [{ type: 'fetchEpisode', id: 'e1' }]);
+  assert.equal(step.state.choosingEpisodeId, 'e1');
+  assert.equal(step.state.screen, 'library');
+});
+
+test('episodeLoaded builds the player state and reuses the load effects', () => {
+  const chosen = run(initialState, { type: 'episodeChosen', episodeId: 'e1' }).state;
+  const { state, effects } = reduce(chosen, { type: 'episodeLoaded', episode: firstEpisode });
+
+  assert.equal(state.screen, 'player');
+  assert.equal(state.currentEpisode, firstEpisode);
+  assert.deepEqual(state.episode, {
+    video: '/api/episodes/e1/video',
+    subtitles: { ja: '/api/episodes/e1/subtitles/ja' },
+  });
+  assert.equal(state.pendingStartPosition, 42);
+  assert.equal(state.notice, '准备中…');
+  assert.equal(state.choosingEpisodeId, null);
+  assert.deepEqual(effects, [
+    { type: 'cancelTimer', timer: 'clearNotice' },
+    { type: 'cancelTimer', timer: 'saveProgress' },
+    { type: 'loadVideo', url: '/api/episodes/e1/video' },
+    { type: 'fetchSubtitles', track: 'ja', url: '/api/episodes/e1/subtitles/ja' },
+  ]);
+});
+
+test('an episodeLoaded response for a no-longer-chosen episode is ignored', () => {
+  const chosen = run(
+    initialState,
+    { type: 'episodeChosen', episodeId: 'e1' },
+    { type: 'episodeChosen', episodeId: 'e2' },
+  ).state;
+  const stale = reduce(chosen, { type: 'episodeLoaded', episode: firstEpisode });
+  assert.equal(stale.state, chosen);
+  assert.deepEqual(stale.effects, []);
+
+  const fresh = reduce(chosen, { type: 'episodeLoaded', episode: secondEpisode });
+  assert.equal(fresh.state.currentEpisode?.id, 'e2');
+});
+
+test('episode failures clear the choice and notify', () => {
+  const chosen = run(initialState, { type: 'episodeChosen', episodeId: 'e1' }).state;
+  const failed = reduce(chosen, { type: 'episodeFailed', message: 'HTTP 404' });
+  assert.equal(failed.state.choosingEpisodeId, null);
+  assert.match(failed.state.notice ?? '', /episode failed: HTTP 404/);
+});
+
+test('the saved position is applied once on the first metadata load', () => {
+  const loaded = choose(firstEpisode);
+  const first = reduce(loaded, { type: 'videoMetadataLoaded' });
+  assert.deepEqual(first.effects, [{ type: 'seek', time: 42 }]);
+  assert.equal(first.state.pendingStartPosition, null);
+  assert.equal(first.state.notice, null);
+
+  const second = reduce(first.state, { type: 'videoMetadataLoaded' });
+  assert.deepEqual(second.effects, []);
+  assert.equal(second.state, first.state);
+});
+
+test('playback starts the periodic progress timer, which keeps running while playing', () => {
+  const playingEpisode = reduce(choose(firstEpisode), { type: 'videoPlayed' });
+  assert.ok(
+    playingEpisode.effects.some(
+      (effect) => effect.type === 'startTimer' && effect.timer === 'saveProgress' && effect.ms === SAVE_PROGRESS_MS,
+    ),
+  );
+
+  const tick = reduce(playingEpisode.state, { type: 'timerFired', timer: 'saveProgress' });
+  assert.deepEqual(tick.effects, [
+    { type: 'saveProgress', episodeId: 'e1' },
+    { type: 'startTimer', timer: 'saveProgress', ms: SAVE_PROGRESS_MS },
+  ]);
+
+  const paused = run(playingEpisode.state, { type: 'videoPaused' }).state;
+  assert.deepEqual(reduce(paused, { type: 'timerFired', timer: 'saveProgress' }).effects, []);
+});
+
+test('pausing saves progress only when an episode is loaded from the library', () => {
+  const playingEpisode = run(choose(firstEpisode), { type: 'videoPlayed' }).state;
+  const paused = reduce(playingEpisode, { type: 'videoPaused' });
+  assert.ok(paused.effects.some((effect) => effect.type === 'saveProgress' && effect.episodeId === 'e1'));
+  assert.ok(paused.effects.some((effect) => effect.type === 'cancelTimer' && effect.timer === 'saveProgress'));
+
+  const oldFlow = run(opened, { type: 'videoPlayed' }).state;
+  assert.ok(!reduce(oldFlow, { type: 'videoPaused' }).effects.some((effect) => effect.type === 'saveProgress'));
+});
+
+test('going back saves progress, pauses and reloads the library', () => {
+  const playingEpisode = run(
+    choose(firstEpisode),
+    { type: 'subtitlesLoaded', track: 'ja', cues: jaCues },
+    { type: 'cuesOnScreen', track: 'ja', ids: [0] },
+    { type: 'videoPlayed' },
+    { type: 'characterTapped', cueId: 0, offset: 0 },
+    { type: 'lookupSucceeded', seq: 1, text: '日本語です', response: responses.first },
+  ).state;
+  assert.equal(playingEpisode.lookup.panelOpen, true);
+
+  const step = reduce(playingEpisode, { type: 'backToLibrary' });
+  assert.equal(step.state.screen, 'library');
+  assert.equal(step.state.wantsPlay, false);
+  assert.equal(step.state.lookup.panelOpen, false);
+  assert.deepEqual(step.effects, [
+    { type: 'pause' },
+    { type: 'saveProgress', episodeId: 'e1' },
+    { type: 'cancelTimer', timer: 'saveProgress' },
+    { type: 'fetchLibrary' },
+  ]);
+
+  assert.equal(reduce(initialState, { type: 'backToLibrary' }).state, initialState);
+});
+
+test('the next episode saves progress and requests that episode', () => {
+  const playingEpisode = choose(firstEpisode);
+  const next = reduce(playingEpisode, { type: 'nextEpisodeRequested' });
+  assert.deepEqual(next.effects, [
+    { type: 'saveProgress', episodeId: 'e1' },
+    { type: 'fetchEpisode', id: 'e2' },
+  ]);
+  assert.equal(next.state.choosingEpisodeId, 'e2');
+
+  const loadedNext = reduce(next.state, { type: 'episodeLoaded', episode: secondEpisode });
+  assert.equal(loadedNext.state.currentEpisode?.id, 'e2');
+  assert.equal(loadedNext.state.pendingStartPosition, 0);
+
+  const last = choose(secondEpisode);
+  assert.deepEqual(reduce(last, { type: 'nextEpisodeRequested' }).effects, []);
+});
+
+test('a late next-episode response after going back is ignored', () => {
+  const next = reduce(choose(firstEpisode), { type: 'nextEpisodeRequested' }).state;
+  assert.equal(next.choosingEpisodeId, 'e2');
+  const back = reduce(next, { type: 'backToLibrary' }).state;
+  assert.equal(back.choosingEpisodeId, null);
+  const late = reduce(back, { type: 'episodeLoaded', episode: secondEpisode });
+  assert.equal(late.state, back);
+  assert.deepEqual(late.effects, []);
+});
+
+test('the end of an episode saves progress and hints at the next one without autoplay', () => {
+  const playingEpisode = run(choose(firstEpisode), { type: 'videoPlayed' }).state;
+  const ended = reduce(playingEpisode, { type: 'videoEnded' });
+  assert.equal(ended.state.wantsPlay, false);
+  assert.deepEqual(ended.state.onScreen, playingEpisode.onScreen);
+  assert.match(ended.state.notice ?? '', /本集结束/);
+  assert.ok(ended.effects.some((effect) => effect.type === 'saveProgress' && effect.episodeId === 'e1'));
+  assert.ok(!ended.effects.some((effect) => effect.type === 'play'));
+
+  const last = run(choose(secondEpisode), { type: 'videoMetadataLoaded' }, { type: 'videoPlayed' }).state;
+  const lastEnded = reduce(last, { type: 'videoEnded' });
+  assert.equal(lastEnded.state.notice, null);
+  assert.ok(lastEnded.effects.some((effect) => effect.type === 'saveProgress' && effect.episodeId === 'e2'));
 });
