@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Cue } from '../core/subtitles.ts';
-import { MAX_LOOKUP_LENGTH, type EpisodeResponse, type LibraryResponse } from '../shared/api.ts';
+import {
+  MAX_LOOKUP_LENGTH,
+  type EpisodeResponse,
+  type LibraryResponse,
+  type LookupResponse,
+  type TermEntry,
+} from '../shared/api.ts';
 import {
   CONTROLS_HIDE_MS,
   SAVE_PROGRESS_MS,
@@ -145,7 +151,7 @@ test('dictionary failures surface as a notice', () => {
 });
 
 test('tapping a character starts a lookup from that offset and pauses playback', () => {
-  const step = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 1 });
+  const step = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 1, time: 0 });
   assert.equal(step.state.lookup.seq, 1);
   assert.deepEqual(step.state.lookup.pending, { seq: 1, origin: { cueId: 0, offset: 1 } });
   assert.equal(step.state.lookup.pausedByLookup, true);
@@ -162,17 +168,17 @@ test('tapping while already paused does not pause again', () => {
     { type: 'subtitlesLoaded', track: 'ja', cues: jaCues },
     { type: 'cuesOnScreen', track: 'ja', ids: [0] },
   ).state;
-  const step = reduce(paused, { type: 'characterTapped', cueId: 0, offset: 0 });
+  const step = reduce(paused, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 });
   assert.deepEqual(step.effects, [{ type: 'lookup', seq: 1, text: '日本語です' }]);
   assert.equal(step.state.lookup.pausedByLookup, false);
 });
 
 test('a tap that cannot start a lookup changes nothing', () => {
-  const punctuation = reduce(withCues, { type: 'characterTapped', cueId: 2, offset: 2 });
+  const punctuation = reduce(withCues, { type: 'characterTapped', cueId: 2, offset: 2, time: 0 });
   assert.equal(punctuation.state, withCues);
   assert.deepEqual(punctuation.effects, []);
 
-  const unknownCue = reduce(withCues, { type: 'characterTapped', cueId: 99, offset: 0 });
+  const unknownCue = reduce(withCues, { type: 'characterTapped', cueId: 99, offset: 0, time: 0 });
   assert.equal(unknownCue.state, withCues);
   assert.deepEqual(unknownCue.effects, []);
 });
@@ -186,20 +192,20 @@ test('a definition tap starts a nested lookup with the text capped at the API li
 });
 
 test('a successful character lookup opens the panel, pins the line and highlights the match', () => {
-  const tapped = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 1 }).state;
+  const tapped = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 1, time: 0 }).state;
   const done = reduce(tapped, { type: 'lookupSucceeded', seq: 1, text: '本語です', response: responses.first });
 
   assert.equal(done.state.lookup.pending, null);
   assert.equal(done.state.lookup.panelOpen, true);
-  assert.deepEqual(done.state.lookup.history, [{ text: '本語です', response: responses.first }]);
+  assert.deepEqual(done.state.lookup.history, [{ text: '本語です', response: responses.first, mined: {} }]);
   assert.deepEqual(done.state.lookup.highlight, { cueId: 0, start: 1, end: 3 });
   assert.deepEqual(done.state.lookup.pinnedJa, [0]);
   assert.deepEqual(done.effects, []);
 });
 
 test('a stale response is dropped while a newer lookup is pending', () => {
-  const first = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0 }).state;
-  const second = reduce(first, { type: 'characterTapped', cueId: 0, offset: 1 }).state;
+  const first = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state;
+  const second = reduce(first, { type: 'characterTapped', cueId: 0, offset: 1, time: 0 }).state;
   const stale = reduce(second, { type: 'lookupSucceeded', seq: 1, text: '日本語です', response: responses.first });
   assert.equal(stale.state, second);
   assert.deepEqual(stale.effects, []);
@@ -217,7 +223,7 @@ test('a response with no pending lookup is dropped', () => {
 
 test('nested lookups push pages and keep the highlight and pinned line', () => {
   const opened = reduce(
-    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 1 }).state,
+    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 1, time: 0 }).state,
     { type: 'lookupSucceeded', seq: 1, text: '本語です', response: responses.first },
   ).state;
   const nestedPending = reduce(opened, { type: 'definitionTapped', text: '語' }).state;
@@ -236,7 +242,7 @@ test('nested lookups push pages and keep the highlight and pinned line', () => {
 });
 
 test('lookup failures notify only for the newest request', () => {
-  const pending = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0 }).state;
+  const pending = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state;
   const stale = reduce(pending, { type: 'lookupFailed', seq: 0, message: 'HTTP 500' });
   assert.equal(stale.state, pending);
   assert.equal(stale.state.notice, null);
@@ -248,7 +254,7 @@ test('lookup failures notify only for the newest request', () => {
 
 test('panelBack pops only when there is a page to go back to', () => {
   const opened = reduce(
-    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0 }).state,
+    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state,
     { type: 'lookupSucceeded', seq: 1, text: '日本語です', response: responses.first },
   ).state;
   assert.equal(reduce(opened, { type: 'panelBack' }).state, opened);
@@ -267,7 +273,7 @@ test('panelBack pops only when there is a page to go back to', () => {
 
 test('closing the panel resets it and resumes only when the lookup paused playback', () => {
   const opened = reduce(
-    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0 }).state,
+    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state,
     { type: 'lookupSucceeded', seq: 1, text: '日本語です', response: responses.first },
   ).state;
 
@@ -285,7 +291,7 @@ test('closing the panel resets it and resumes only when the lookup paused playba
 });
 
 test('a late response after closing does not reopen the panel', () => {
-  const pending = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0 }).state;
+  const pending = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state;
   // The panel is only open once the lookup succeeds; closing mid-flight must cancel it.
   const closed = run(pending, { type: 'lookupSucceeded', seq: 1, text: '日本語です', response: responses.first });
   const dismissed = run(closed.state, { type: 'panelClosed' }).state;
@@ -295,7 +301,7 @@ test('a late response after closing does not reopen the panel', () => {
 
 test('tapping the stage while the panel is open closes it instead of toggling controls', () => {
   const opened = reduce(
-    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0 }).state,
+    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state,
     { type: 'lookupSucceeded', seq: 1, text: '日本語です', response: responses.first },
   ).state;
   assert.equal(opened.controlsShown, true);
@@ -308,7 +314,7 @@ test('tapping the stage while the panel is open closes it instead of toggling co
 
 test('manual playback while the panel is open clears pausedByLookup but keeps the panel', () => {
   const opened = reduce(
-    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0 }).state,
+    reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state,
     { type: 'lookupSucceeded', seq: 1, text: '日本語です', response: responses.first },
   ).state;
   const played = reduce(opened, { type: 'videoPlayed' }).state;
@@ -456,7 +462,7 @@ test('going back saves progress, pauses and reloads the library', () => {
     { type: 'subtitlesLoaded', track: 'ja', cues: jaCues },
     { type: 'cuesOnScreen', track: 'ja', ids: [0] },
     { type: 'videoPlayed' },
-    { type: 'characterTapped', cueId: 0, offset: 0 },
+    { type: 'characterTapped', cueId: 0, offset: 0, time: 0 },
     { type: 'lookupSucceeded', seq: 1, text: '日本語です', response: responses.first },
   ).state;
   assert.equal(playingEpisode.lookup.panelOpen, true);
@@ -515,4 +521,131 @@ test('the end of an episode saves progress and hints at the next one without aut
   const lastEnded = reduce(last, { type: 'videoEnded' });
   assert.equal(lastEnded.state.notice, null);
   assert.ok(lastEnded.effects.some((effect) => effect.type === 'saveProgress' && effect.episodeId === 'e2'));
+});
+
+// ---------------------------------------------------------------- mining
+
+const termEntry: TermEntry = {
+  headwords: [{ term: '日本語', reading: 'にほんご' }],
+  inflections: ['-た'],
+  frequencies: [{ dictionary: 'JPDB', value: '900' }],
+  pitches: [1],
+  definitions: [{ dictionary: '大辞泉', glossary: [{ type: 'text', text: 'Japanese language' }] }],
+};
+const secondTermEntry: TermEntry = {
+  ...termEntry,
+  headwords: [{ term: '国語', reading: 'こくご' }],
+};
+const mineResponse: LookupResponse = {
+  matchLength: 2,
+  entries: [termEntry, secondTermEntry],
+};
+const definitions = [{ dictionary: '大辞泉', html: '<li>Japanese language</li>' }];
+
+const miningReady = (() => {
+  const loaded = choose(firstEpisode);
+  return run(
+    loaded,
+    { type: 'subtitlesLoaded', track: 'ja', cues: jaCues },
+    { type: 'cuesOnScreen', track: 'ja', ids: [0] },
+    { type: 'characterTapped', cueId: 0, offset: 1, time: 12.5 },
+    { type: 'lookupSucceeded', seq: 1, text: '本語です', response: mineResponse },
+  ).state;
+})();
+
+function createCardEffect(step: { effects: Effect[] }): Extract<Effect, { type: 'createCard' }> {
+  const effect = step.effects.find((candidate): candidate is Extract<Effect, { type: 'createCard' }> =>
+    candidate.type === 'createCard',
+  );
+  assert.ok(effect, 'expected a createCard effect');
+  return effect;
+}
+
+test('mining builds a card request from the origin cue, highlight and time', () => {
+  const step = reduce(miningReady, { type: 'mineRequested', entryIndex: 0, definitions });
+
+  assert.deepEqual(step.effects, [
+    {
+      type: 'createCard',
+      entryIndex: 0,
+      request: {
+        episodeId: 'e1',
+        term: '日本語',
+        reading: 'にほんご',
+        definitions,
+        frequencies: [{ dictionary: 'JPDB', value: '900' }],
+        pitches: [1],
+        cue: { start: 0, end: 10, text: '日本語です' },
+        highlight: { start: 1, end: 3 },
+        time: 12.5,
+      },
+    },
+  ]);
+  assert.deepEqual(step.state.lookup.history[0]?.mined, { 0: { status: 'mining' } });
+});
+
+test('a nested lookup mines into the same origin cue and time', () => {
+  const nested = run(
+    miningReady,
+    { type: 'definitionTapped', text: '語' },
+    { type: 'lookupSucceeded', seq: 2, text: '語', response: mineResponse },
+  ).state;
+  assert.equal(nested.lookup.history.length, 2);
+
+  const effect = createCardEffect(reduce(nested, { type: 'mineRequested', entryIndex: 1, definitions }));
+  assert.equal(effect.request.term, '国語');
+  assert.equal(effect.request.reading, 'こくご');
+  assert.deepEqual(effect.request.cue, { start: 0, end: 10, text: '日本語です' });
+  assert.deepEqual(effect.request.highlight, { start: 1, end: 3 });
+  assert.equal(effect.request.time, 12.5);
+});
+
+test('mining is ignored without a lookup origin', () => {
+  const noOrigin = run(
+    initialState,
+    { type: 'definitionTapped', text: '語' },
+    { type: 'lookupSucceeded', seq: 1, text: '語', response: mineResponse },
+  ).state;
+  const step = reduce(noOrigin, { type: 'mineRequested', entryIndex: 0, definitions });
+  assert.equal(step.state, noOrigin);
+  assert.deepEqual(step.effects, []);
+
+  const outOfRange = reduce(miningReady, { type: 'mineRequested', entryIndex: 9, definitions });
+  assert.equal(outOfRange.state, miningReady);
+  assert.deepEqual(outOfRange.effects, []);
+});
+
+test('a second tap while an entry is mining is ignored', () => {
+  const first = reduce(miningReady, { type: 'mineRequested', entryIndex: 0, definitions });
+  const second = reduce(first.state, { type: 'mineRequested', entryIndex: 0, definitions });
+  assert.equal(second.state, first.state);
+  assert.deepEqual(second.effects, []);
+});
+
+test('mining results are recorded on the entry that was mined', () => {
+  const miningBoth = reduce(
+    reduce(miningReady, { type: 'mineRequested', entryIndex: 0, definitions }).state,
+    { type: 'mineRequested', entryIndex: 1, definitions },
+  ).state;
+
+  const minedFirst = reduce(miningBoth, {
+    type: 'mineSucceeded',
+    entryIndex: 0,
+    response: { noteId: 7, duplicates: 2 },
+  }).state;
+  assert.deepEqual(minedFirst.lookup.history[0]?.mined[0], { status: 'done', noteId: 7, duplicates: 2 });
+  assert.deepEqual(minedFirst.lookup.history[0]?.mined[1], { status: 'mining' });
+
+  const failedSecond = reduce(minedFirst, { type: 'mineFailed', entryIndex: 1, message: 'Anki refused' });
+  assert.deepEqual(failedSecond.state.lookup.history[0]?.mined[1], { status: 'error', message: 'Anki refused' });
+});
+
+test('results for an entry that is not mining are ignored', () => {
+  const success = reduce(miningReady, { type: 'mineSucceeded', entryIndex: 0, response: { noteId: 1, duplicates: 0 } });
+  assert.equal(success.state, miningReady);
+  assert.deepEqual(success.effects, []);
+
+  const failure = reduce(miningReady, { type: 'mineFailed', entryIndex: 0, message: 'no pending card' });
+  assert.equal(failure.state, miningReady);
+  assert.deepEqual(failure.effects, []);
 });

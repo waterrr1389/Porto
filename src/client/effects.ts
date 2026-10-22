@@ -2,6 +2,9 @@
 // timers. Results come back only as dispatched Actions.
 import { parseSubtitles } from '../core/subtitles.ts';
 import type {
+  ApiError,
+  CardRequest,
+  CardResponse,
   DictionaryInfo,
   EpisodeResponse,
   LibraryResponse,
@@ -85,6 +88,16 @@ export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Di
           .catch((error: unknown) => dispatch({ type: 'lookupFailed', seq: effect.seq, message: String(error) }));
         return;
 
+      case 'createCard':
+        postCard(effect.request)
+          .then((response) => {
+            dispatch({ type: 'mineSucceeded', entryIndex: effect.entryIndex, response });
+          })
+          .catch((error: unknown) => {
+            dispatch({ type: 'mineFailed', entryIndex: effect.entryIndex, message: String(error) });
+          });
+        return;
+
       case 'play':
         // A rejected play() (e.g. no user gesture yet) surfaces as no 'play' event.
         video.play().catch(() => {});
@@ -142,6 +155,26 @@ async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json()) as T;
+}
+
+/** Posts a card and surfaces the server's ApiError message when it refuses. */
+async function postCard(request: CardRequest): Promise<CardResponse> {
+  const response = await fetch('/api/cards', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try {
+      const body = (await response.json()) as ApiError;
+      if (typeof body.error === 'string' && body.error !== '') message = body.error;
+    } catch {
+      // Keep the status text when the body is not the contract's JSON.
+    }
+    throw new Error(message);
+  }
+  return (await response.json()) as CardResponse;
 }
 
 /** iPad Safari only has the prefixed API; iPhone has none for elements. */

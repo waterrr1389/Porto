@@ -3,7 +3,7 @@
 // definitions. This is the only client module that imports Yomitan.
 import { scopeCss } from '../../../core/css.ts';
 import { scanText } from '../../../core/scan.ts';
-import type { DictionaryInfo, TermEntry } from '../../../shared/api.ts';
+import type { DictionaryInfo, LookupResponse, TermEntry } from '../../../shared/api.ts';
 import type { Dispatch } from '../../effects.ts';
 import type { LookupPage, State } from '../../state.ts';
 import { StructuredContentGenerator } from 'yomitan/structured-content-generator';
@@ -28,7 +28,9 @@ const CONTENT_MANAGER = {
 export function createPanelView(els: PanelElements, dispatch: Dispatch) {
   const generator = new StructuredContentGenerator(CONTENT_MANAGER, document, window);
   let styled: readonly DictionaryInfo[] | null = null;
-  let shownPage: LookupPage | undefined;
+  let shownResponse: LookupResponse | undefined;
+  let shownText: string | undefined;
+  let mineButtons: HTMLButtonElement[] = [];
 
   els.back.addEventListener('click', () => dispatch({ type: 'panelBack' }));
   els.close.addEventListener('click', () => dispatch({ type: 'panelClosed' }));
@@ -56,23 +58,28 @@ export function createPanelView(els: PanelElements, dispatch: Dispatch) {
     els.back.disabled = state.lookup.history.length < 2;
 
     const page = state.lookup.history.at(-1);
-    // Rebuilding on page identity keeps the results DOM and its scroll position
-    // while unrelated state, such as on-screen cues, keeps arriving.
-    if (page !== shownPage) {
-      shownPage = page;
-      showPage(page);
+    // Rebuilding on the response keeps the results DOM and its scroll position
+    // while mining updates or on-screen cues change; the button states follow
+    // in place.
+    if (page?.response !== shownResponse || page?.text !== shownText) {
+      shownResponse = page?.response;
+      shownText = page?.text;
+      mineButtons = showPage(page);
     }
+    updateMineButtons(page, mineButtons);
   };
 
-  function showPage(page: LookupPage | undefined): void {
+  function showPage(page: LookupPage | undefined): HTMLButtonElement[] {
     els.query.textContent = page?.text ?? '';
     els.results.scrollTop = 0;
     const entries = page?.response.entries ?? [];
     if (entries.length === 0) {
       els.results.replaceChildren(...(page === undefined ? [] : [el('div', 'empty', '没有找到词条')]));
-      return;
+      return [];
     }
-    els.results.replaceChildren(...entries.map((entry) => renderEntry(entry, generator)));
+    const rendered = entries.map((entry, index) => renderEntry(entry, generator, index, dispatch));
+    els.results.replaceChildren(...rendered.map(({ box }) => box));
+    return rendered.map(({ mine }) => mine);
   }
 }
 
@@ -89,7 +96,12 @@ function applyDictionaryStyles(dictionaries: readonly DictionaryInfo[]): void {
     .join('\n');
 }
 
-function renderEntry(entry: TermEntry, generator: StructuredContentGenerator): HTMLElement {
+function renderEntry(
+  entry: TermEntry,
+  generator: StructuredContentGenerator,
+  entryIndex: number,
+  dispatch: Dispatch,
+): { box: HTMLElement; mine: HTMLButtonElement } {
   const box = el('div', 'entry');
   const head = el('div', 'entry-head');
   const headword = entry.headwords[0];
@@ -103,7 +115,10 @@ function renderEntry(entry: TermEntry, generator: StructuredContentGenerator): H
     head.append(el('span', 'reading', `· ${other.term}`));
   }
   const mine = el('button', 'mine', '制卡');
-  mine.disabled = true;
+  mine.type = 'button';
+  mine.addEventListener('click', () => {
+    dispatch({ type: 'mineRequested', entryIndex, definitions: collectDefinitions(box) });
+  });
   head.append(mine);
   box.append(head);
 
@@ -139,7 +154,42 @@ function renderEntry(entry: TermEntry, generator: StructuredContentGenerator): H
     box.append(details);
   });
 
-  return box;
+  return { box, mine };
+}
+
+/** Definition HTML is rendered here and sent along; the server never renders it. */
+function collectDefinitions(box: HTMLElement): { dictionary: string; html: string }[] {
+  return [...box.querySelectorAll<HTMLElement>('ul.gloss[data-dictionary]')].map((list) => ({
+    dictionary: list.dataset.dictionary ?? '',
+    html: list.innerHTML,
+  }));
+}
+
+function updateMineButtons(page: LookupPage | undefined, buttons: readonly HTMLButtonElement[]): void {
+  buttons.forEach((button, entryIndex) => {
+    const status = page?.mined[entryIndex];
+    button.title = '';
+    if (status === undefined) {
+      button.textContent = '制卡';
+      button.disabled = false;
+      return;
+    }
+    switch (status.status) {
+      case 'mining':
+        button.textContent = '制卡中…';
+        button.disabled = true;
+        break;
+      case 'done':
+        button.textContent = status.duplicates > 0 ? `已制卡（已有 ${status.duplicates} 张）` : '已制卡';
+        button.disabled = true;
+        break;
+      case 'error':
+        button.textContent = '重试';
+        button.disabled = false;
+        button.title = status.message;
+        break;
+    }
+  });
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(

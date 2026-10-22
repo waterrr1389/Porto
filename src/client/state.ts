@@ -8,6 +8,8 @@ import type { Cue } from '../core/subtitles.ts';
 import { highlightRange, scanText } from '../core/scan.ts';
 import {
   MAX_LOOKUP_LENGTH,
+  type CardRequest,
+  type CardResponse,
   type DictionaryInfo,
   type EpisodeResponse,
   type LibraryResponse,
@@ -39,7 +41,15 @@ export interface LookupPending {
 export interface LookupPage {
   text: string;
   response: LookupResponse;
+  /** Card creation status by entry index; survives going back to this page. */
+  mined: Record<number, EntryMining>;
 }
+
+/** Where creating a card for one entry stands. */
+export type EntryMining =
+  | { status: 'mining' }
+  | { status: 'done'; noteId: number; duplicates: number }
+  | { status: 'error'; message: string };
 
 export interface LookupHighlight {
   cueId: number;
@@ -59,6 +69,8 @@ export interface LookupState {
   pausedByLookup: boolean;
   /** Cue ids to keep on screen while the panel is open; null while closed. */
   pinnedJa: number[] | null;
+  /** Playback time of the character tap that opened this lookup; the card screenshot time. */
+  originTime: number | null;
 }
 
 export interface State {
@@ -103,10 +115,13 @@ export type Action =
   | { type: 'subtitlesLoaded'; track: Track; cues: Cue[] }
   | { type: 'subtitlesFailed'; track: Track; message: string }
   | { type: 'cuesOnScreen'; track: Track; ids: number[] }
-  | { type: 'characterTapped'; cueId: number; offset: number }
+  | { type: 'characterTapped'; cueId: number; offset: number; time: number }
   | { type: 'definitionTapped'; text: string }
   | { type: 'lookupSucceeded'; seq: number; text: string; response: LookupResponse }
   | { type: 'lookupFailed'; seq: number; message: string }
+  | { type: 'mineRequested'; entryIndex: number; definitions: { dictionary: string; html: string }[] }
+  | { type: 'mineSucceeded'; entryIndex: number; response: CardResponse; pageText?: string }
+  | { type: 'mineFailed'; entryIndex: number; message: string }
   | { type: 'panelBack' }
   | { type: 'panelClosed' }
   | { type: 'stageTapped' }
@@ -132,6 +147,7 @@ export type Effect =
   | { type: 'fetchEpisode'; id: string }
   | { type: 'saveProgress'; episodeId: string }
   | { type: 'lookup'; seq: number; text: string }
+  | { type: 'createCard'; request: CardRequest; entryIndex: number }
   | { type: 'play' }
   | { type: 'pause' }
   | { type: 'seek'; time: number }
@@ -182,6 +198,7 @@ export const initialState: State = {
     panelOpen: false,
     pausedByLookup: false,
     pinnedJa: null,
+    originTime: null,
   },
 };
 
@@ -304,7 +321,7 @@ export function reduce(state: State, action: Action): Step {
       return only({ ...state, onScreen: { ...state.onScreen, [action.track]: action.ids } });
 
     case 'characterTapped':
-      return tapCharacter(state, action.cueId, action.offset);
+      return tapCharacter(state, action.cueId, action.offset, action.time);
 
     case 'definitionTapped': {
       const text = action.text.slice(0, MAX_LOOKUP_LENGTH);
@@ -323,6 +340,27 @@ export function reduce(state: State, action: Action): Step {
       const { lookup } = state;
       if (lookup.pending === null || action.seq !== lookup.seq) return only(state);
       return notify({ ...state, lookup: { ...lookup, pending: null } }, `lookup failed: ${action.message}`);
+    }
+
+    case 'mineRequested':
+      return mineEntry(state, action.entryIndex, action.definitions);
+
+    case 'mineSucceeded': {
+      const page = miningPage(state, action.entryIndex, action.pageText);
+      if (page === undefined) return only(state);
+      return only(
+        withMinedEntry(state, page, action.entryIndex, {
+          status: 'done',
+          noteId: action.response.noteId,
+          duplicates: action.response.duplicates,
+        }),
+      );
+    }
+
+    case 'mineFailed': {
+      const page = miningPage(state, action.entryIndex);
+      if (page === undefined) return only(state);
+      return only(withMinedEntry(state, page, action.entryIndex, { status: 'error', message: action.message }));
     }
 
     case 'panelBack': {
@@ -467,11 +505,12 @@ function closedLookup(lookup: LookupState): LookupState {
     panelOpen: false,
     pausedByLookup: false,
     pinnedJa: null,
+    originTime: null,
   };
 }
 
 /** A tap on a Japanese character: the scan text decides whether there is a lookup at all. */
-function tapCharacter(state: State, cueId: number, offset: number): Step {
+function tapCharacter(state: State, cueId: number, offset: number, time: number): Step {
   const cue = state.cues.ja.find((candidate) => candidate.id === cueId);
   if (cue === undefined) return only(state);
   const text = scanText(cue.text, offset);
@@ -487,6 +526,7 @@ function tapCharacter(state: State, cueId: number, offset: number): Step {
         ...state.lookup,
         seq,
         pending: { seq, origin: { cueId, offset } },
+        originTime: time,
         pausedByLookup: state.lookup.pausedByLookup || state.wantsPlay,
       },
     },
@@ -502,7 +542,7 @@ function acceptLookup(state: State, seq: number, text: string, response: LookupR
   const { lookup } = state;
   if (lookup.pending === null || seq !== lookup.seq) return only(state);
 
-  const page: LookupPage = { text, response };
+  const page: LookupPage = { text, response, mined: {} };
   if (lookup.pending.origin === null) {
     return only({ ...state, lookup: { ...lookup, pending: null, history: [...lookup.history, page] } });
   }
@@ -534,5 +574,68 @@ function closePanel(state: State): Step {
     state: { ...state, lookup: closedLookup(lookup) },
     effects: lookup.pausedByLookup ? [{ type: 'play' }] : [],
   };
+}
+
+/**
+ * Builds a card request from the lookup that is on screen: the origin cue and
+ * its highlighted range, not the nested page, describe the sentence to keep.
+ */
+function mineEntry(
+  state: State,
+  entryIndex: number,
+  definitions: { dictionary: string; html: string }[],
+): Step {
+  const { lookup } = state;
+  const page = lookup.history.at(-1);
+  const { highlight, originTime } = lookup;
+  const episode = state.currentEpisode;
+  if (page === undefined || highlight === null || originTime === null || episode === null) return only(state);
+  if (page.mined[entryIndex]?.status === 'mining') return only(state);
+
+  const entry = page.response.entries[entryIndex];
+  if (entry === undefined) return only(state);
+  const headword = entry.headwords[0];
+  if (headword === undefined) return only(state);
+
+  const cue = state.cues.ja.find((candidate) => candidate.id === highlight.cueId);
+  if (cue === undefined) return only(state);
+
+  const request: CardRequest = {
+    episodeId: episode.id,
+    term: headword.term,
+    reading: headword.reading,
+    definitions: definitions.map((definition) => ({ ...definition })),
+    frequencies: entry.frequencies.map((frequency) => ({ ...frequency })),
+    pitches: [...entry.pitches],
+    cue: { start: cue.start, end: cue.end, text: cue.text },
+    highlight: { start: highlight.start, end: highlight.end },
+    time: originTime,
+  };
+  return {
+    state: withMinedEntry(state, page, entryIndex, { status: 'mining' }),
+    effects: [{ type: 'createCard', request, entryIndex }],
+  };
+}
+
+/** Finds the page still waiting for this entry's card, newest first. */
+function miningPage(state: State, entryIndex: number, pageText?: string): LookupPage | undefined {
+  const history = state.lookup.history;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const page = history[index];
+    if (page === undefined) continue;
+    if (pageText !== undefined && page.text !== pageText) continue;
+    if (page.mined[entryIndex]?.status === 'mining') return page;
+  }
+  return undefined;
+}
+
+function withMinedEntry(state: State, page: LookupPage, entryIndex: number, status: EntryMining): State {
+  const history = state.lookup.history;
+  const position = history.lastIndexOf(page);
+  if (position < 0) return state;
+  const updated: LookupPage = { ...page, mined: { ...page.mined, [entryIndex]: status } };
+  const nextHistory = [...history];
+  nextHistory[position] = updated;
+  return { ...state, lookup: { ...state.lookup, history: nextHistory } };
 }
 

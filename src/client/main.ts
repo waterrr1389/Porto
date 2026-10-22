@@ -66,7 +66,7 @@ const views = [
     canFullscreen(stage),
   ),
   createLibraryView({ root: byId('library-screen') }, dispatch),
-  createSubtitlesView({ ja: byId('ja'), zh: byId('zh') }, dispatch),
+  createSubtitlesView({ ja: byId('ja'), zh: byId('zh') }, dispatch, () => video.currentTime),
   createPanelView(
     {
       stage,

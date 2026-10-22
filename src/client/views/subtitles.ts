@@ -10,7 +10,11 @@ export interface SubtitleElements {
   zh: HTMLElement;
 }
 
-export function createSubtitlesView(els: SubtitleElements, dispatch: Dispatch) {
+export function createSubtitlesView(
+  els: SubtitleElements,
+  dispatch: Dispatch,
+  currentTime: () => number,
+) {
   const shown: Record<Track, string | null> = { ja: null, zh: null };
 
   els.ja.addEventListener('click', (event) => {
@@ -23,7 +27,7 @@ export function createSubtitlesView(els: SubtitleElements, dispatch: Dispatch) {
     if (!Number.isInteger(cueId) || !Number.isInteger(offset)) return;
     // The stage tap layer sits behind the subtitles; a character tap must not toggle the controls too.
     event.stopPropagation();
-    dispatch({ type: 'characterTapped', cueId, offset });
+    dispatch({ type: 'characterTapped', cueId, offset, time: currentTime() });
   });
 
   return function render(state: State): void {
