@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Cue } from '../core/subtitles.ts';
 import {
+  MAX_DUPLICATE_TERMS,
   MAX_LOOKUP_LENGTH,
   type EpisodeResponse,
   type LibraryResponse,
@@ -200,7 +201,7 @@ test('a successful character lookup opens the panel, pins the line and highlight
 
   assert.equal(done.state.lookup.pending, null);
   assert.equal(done.state.lookup.panelOpen, true);
-  assert.deepEqual(done.state.lookup.history, [{ text: '本語です', response: responses.first, mined: {} }]);
+  assert.deepEqual(done.state.lookup.history, [{ id: 1, text: '本語です', response: responses.first, mined: {}, duplicates: {} }]);
   assert.deepEqual(done.state.lookup.highlight, { cueId: 0, start: 1, end: 3 });
   assert.deepEqual(done.state.lookup.pinnedJa, [0]);
   assert.deepEqual(done.effects, []);
@@ -651,4 +652,111 @@ test('results for an entry that is not mining are ignored', () => {
   const failure = reduce(miningReady, { type: 'mineFailed', entryIndex: 0, message: 'no pending card' });
   assert.equal(failure.state, miningReady);
   assert.deepEqual(failure.effects, []);
+});
+
+// ---------------------------------------------------------- deck duplicates
+
+function checkDuplicatesEffect(step: { effects: Effect[] }): Extract<Effect, { type: 'checkDuplicates' }> {
+  const effect = step.effects.find((candidate): candidate is Extract<Effect, { type: 'checkDuplicates' }> =>
+    candidate.type === 'checkDuplicates',
+  );
+  assert.ok(effect, 'expected a checkDuplicates effect');
+  return effect;
+}
+
+const manyEntries: TermEntry[] = Array.from({ length: 25 }, (_, index) => ({
+  ...termEntry,
+  headwords: [{ term: `語${index}`, reading: '' }],
+}));
+const duplicateHeavyResponse: LookupResponse = {
+  matchLength: 1,
+  entries: [termEntry, termEntry, ...manyEntries],
+};
+
+test('a successful lookup checks the unique headword terms, capped at the API limit', () => {
+  const tapped = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state;
+  const step = reduce(tapped, {
+    type: 'lookupSucceeded',
+    seq: 1,
+    text: '日本語です',
+    response: duplicateHeavyResponse,
+  });
+
+  const effect = checkDuplicatesEffect(step);
+  assert.equal(effect.pageId, 1);
+  assert.equal(effect.terms.length, MAX_DUPLICATE_TERMS);
+  assert.deepEqual(effect.terms.slice(0, 3), ['日本語', '語0', '語1']);
+  assert.equal(new Set(effect.terms).size, effect.terms.length);
+  assert.equal(step.state.lookup.history[0]?.duplicates, undefined);
+});
+
+test('duplicate counts are stored on the page they belong to', () => {
+  const tapped = reduce(withCues, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 }).state;
+  const firstPage = reduce(tapped, {
+    type: 'lookupSucceeded',
+    seq: 1,
+    text: '日本語です',
+    response: mineResponse,
+  }).state;
+  const nested = run(
+    firstPage,
+    { type: 'definitionTapped', text: '語' },
+    { type: 'lookupSucceeded', seq: 2, text: '語', response: mineResponse },
+  ).state;
+  const [first, second] = nested.lookup.history;
+  assert.ok(first !== undefined && second !== undefined);
+  assert.notEqual(first.id, second.id);
+
+  const secondChecked = reduce(nested, {
+    type: 'duplicatesChecked',
+    pageId: second.id,
+    counts: { 日本語: 3, 国語: 1 },
+  }).state;
+  assert.equal(secondChecked.lookup.history[0]?.duplicates, undefined);
+  assert.deepEqual(secondChecked.lookup.history[1]?.duplicates, { 日本語: 3, 国語: 1 });
+
+  const firstChecked = reduce(secondChecked, {
+    type: 'duplicatesChecked',
+    pageId: first.id,
+    counts: { 日本語: 1 },
+  }).state;
+  assert.deepEqual(firstChecked.lookup.history[0]?.duplicates, { 日本語: 1 });
+  assert.deepEqual(firstChecked.lookup.history[1]?.duplicates, { 日本語: 3, 国語: 1 });
+});
+
+test('duplicate results for a page no longer in history are ignored', () => {
+  const pageId = miningReady.lookup.history[0]?.id as number;
+  const stale = reduce(miningReady, { type: 'duplicatesChecked', pageId: 999, counts: { 日本語: 2 } });
+  assert.equal(stale.state, miningReady);
+  assert.deepEqual(stale.effects, []);
+
+  const closed = run(miningReady, { type: 'panelClosed' }).state;
+  assert.deepEqual(closed.lookup.history, []);
+  const late = reduce(closed, { type: 'duplicatesChecked', pageId, counts: { 日本語: 2 } });
+  assert.equal(late.state, closed);
+});
+
+test('a failed duplicate check marks the page unavailable', () => {
+  const pageId = miningReady.lookup.history[0]?.id as number;
+  const failed = reduce(miningReady, { type: 'duplicatesFailed', pageId }).state;
+  assert.equal(failed.lookup.history[0]?.duplicates, 'unavailable');
+
+  const stale = reduce(miningReady, { type: 'duplicatesFailed', pageId: 999 });
+  assert.equal(stale.state, miningReady);
+});
+
+test('creating a card bumps that term count so the badge stays consistent', () => {
+  const pageId = miningReady.lookup.history[0]?.id as number;
+  const checked = reduce(miningReady, {
+    type: 'duplicatesChecked',
+    pageId,
+    counts: { 日本語: 2, 国語: 0 },
+  }).state;
+  const mined = reduce(
+    reduce(checked, { type: 'mineRequested', entryIndex: 0, definitions }).state,
+    { type: 'mineSucceeded', entryIndex: 0, response: { noteId: 5, duplicates: 2 } },
+  ).state;
+
+  assert.deepEqual(mined.lookup.history[0]?.duplicates, { 日本語: 3, 国語: 0 });
+  assert.deepEqual(mined.lookup.history[0]?.mined[0], { status: 'done', noteId: 5, duplicates: 2 });
 });

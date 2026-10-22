@@ -7,10 +7,12 @@
 import type { Cue } from '../core/subtitles.ts';
 import { highlightRange, scanText } from '../core/scan.ts';
 import {
+  MAX_DUPLICATE_TERMS,
   MAX_LOOKUP_LENGTH,
   type CardRequest,
   type CardResponse,
   type DictionaryInfo,
+  type DuplicatesResponse,
   type EpisodeResponse,
   type LibraryResponse,
   type LookupResponse,
@@ -40,10 +42,14 @@ export interface LookupPending {
 }
 
 export interface LookupPage {
+  /** Unique within a lookup state; duplicate-check results are matched by this. */
+  id: number;
   text: string;
   response: LookupResponse;
   /** Card creation status by entry index; survives going back to this page. */
   mined: Record<number, EntryMining>;
+  /** Deck counts by term; 'unavailable' when Anki could not be reached; undefined while checking. */
+  duplicates?: Record<string, number> | 'unavailable';
 }
 
 /** Where creating a card for one entry stands. */
@@ -72,6 +78,8 @@ export interface LookupState {
   pinnedJa: number[] | null;
   /** Playback time of the character tap that opened this lookup; the card screenshot time. */
   originTime: number | null;
+  /** Id for the next lookup page; ids stay unique for stale duplicate-check results. */
+  nextPageId: number;
 }
 
 export interface State {
@@ -120,6 +128,8 @@ export type Action =
   | { type: 'definitionTapped'; text: string }
   | { type: 'lookupSucceeded'; seq: number; text: string; response: LookupResponse }
   | { type: 'lookupFailed'; seq: number; message: string }
+  | { type: 'duplicatesChecked'; pageId: number; counts: DuplicatesResponse }
+  | { type: 'duplicatesFailed'; pageId: number }
   | { type: 'mineRequested'; entryIndex: number; definitions: { dictionary: string; html: string }[] }
   | { type: 'mineSucceeded'; entryIndex: number; response: CardResponse; pageText?: string }
   | { type: 'mineFailed'; entryIndex: number; message: string }
@@ -148,6 +158,7 @@ export type Effect =
   | { type: 'fetchEpisode'; id: string }
   | { type: 'saveProgress'; episodeId: string }
   | { type: 'lookup'; seq: number; text: string }
+  | { type: 'checkDuplicates'; pageId: number; terms: string[] }
   | { type: 'createCard'; request: CardRequest; entryIndex: number }
   | { type: 'play' }
   | { type: 'pause' }
@@ -200,6 +211,7 @@ export const initialState: State = {
     pausedByLookup: false,
     pinnedJa: null,
     originTime: null,
+    nextPageId: 1,
   },
 };
 
@@ -343,17 +355,37 @@ export function reduce(state: State, action: Action): Step {
       return notify({ ...state, lookup: { ...lookup, pending: null } }, `lookup failed: ${action.message}`);
     }
 
+    case 'duplicatesChecked': {
+      const page = findPage(state, action.pageId);
+      if (page === undefined) return only(state);
+      return only(updatePage(state, page, { ...page, duplicates: action.counts }));
+    }
+
+    case 'duplicatesFailed': {
+      const page = findPage(state, action.pageId);
+      if (page === undefined) return only(state);
+      return only(updatePage(state, page, { ...page, duplicates: 'unavailable' }));
+    }
+
     case 'mineRequested':
       return mineEntry(state, action.entryIndex, action.definitions);
 
     case 'mineSucceeded': {
       const page = miningPage(state, action.entryIndex, action.pageText);
       if (page === undefined) return only(state);
+      const term = page.response.entries[action.entryIndex]?.headwords[0]?.term;
       return only(
-        withMinedEntry(state, page, action.entryIndex, {
-          status: 'done',
-          noteId: action.response.noteId,
-          duplicates: action.response.duplicates,
+        updatePage(state, page, {
+          ...page,
+          mined: {
+            ...page.mined,
+            [action.entryIndex]: {
+              status: 'done',
+              noteId: action.response.noteId,
+              duplicates: action.response.duplicates,
+            },
+          },
+          duplicates: bumpDuplicateCount(page.duplicates, term),
         }),
       );
     }
@@ -361,7 +393,12 @@ export function reduce(state: State, action: Action): Step {
     case 'mineFailed': {
       const page = miningPage(state, action.entryIndex);
       if (page === undefined) return only(state);
-      return only(withMinedEntry(state, page, action.entryIndex, { status: 'error', message: action.message }));
+      return only(
+        updatePage(state, page, {
+          ...page,
+          mined: { ...page.mined, [action.entryIndex]: { status: 'error', message: action.message } },
+        }),
+      );
     }
 
     case 'panelBack': {
@@ -543,25 +580,38 @@ function acceptLookup(state: State, seq: number, text: string, response: LookupR
   const { lookup } = state;
   if (lookup.pending === null || seq !== lookup.seq) return only(state);
 
-  const page: LookupPage = { text, response, mined: {} };
+  const pageId = lookup.nextPageId;
+  const terms = duplicateTerms(response);
+  const page: LookupPage = {
+    id: pageId,
+    text,
+    response,
+    mined: {},
+    duplicates: terms.length === 0 ? {} : undefined,
+  };
+  const effects: Effect[] = terms.length === 0 ? [] : [{ type: 'checkDuplicates', pageId, terms }];
+  const base: LookupState = { ...lookup, nextPageId: pageId + 1, pending: null };
+
   if (lookup.pending.origin === null) {
-    return only({ ...state, lookup: { ...lookup, pending: null, history: [...lookup.history, page] } });
+    return { state: { ...state, lookup: { ...base, history: [...lookup.history, page] } }, effects };
   }
 
   const { cueId, offset } = lookup.pending.origin;
   const cue = state.cues.ja.find((candidate) => candidate.id === cueId);
   const range = cue === undefined ? null : highlightRange(cue.text, offset, response.matchLength);
-  return only({
-    ...state,
-    lookup: {
-      ...lookup,
-      pending: null,
-      history: [page],
-      highlight: range === null ? null : { cueId, ...range },
-      panelOpen: true,
-      pinnedJa: [...state.onScreen.ja],
+  return {
+    state: {
+      ...state,
+      lookup: {
+        ...base,
+        history: [page],
+        highlight: range === null ? null : { cueId, ...range },
+        panelOpen: true,
+        pinnedJa: [...state.onScreen.ja],
+      },
     },
-  });
+    effects,
+  };
 }
 
 /**
@@ -613,7 +663,10 @@ function mineEntry(
     time: originTime,
   };
   return {
-    state: withMinedEntry(state, page, entryIndex, { status: 'mining' }),
+    state: updatePage(state, page, {
+      ...page,
+      mined: { ...page.mined, [entryIndex]: { status: 'mining' } },
+    }),
     effects: [{ type: 'createCard', request, entryIndex }],
   };
 }
@@ -630,13 +683,39 @@ function miningPage(state: State, entryIndex: number, pageText?: string): Lookup
   return undefined;
 }
 
-function withMinedEntry(state: State, page: LookupPage, entryIndex: number, status: EntryMining): State {
-  const history = state.lookup.history;
-  const position = history.lastIndexOf(page);
+/** Replaces one page in place; page copies keep results matched to the same position. */
+function updatePage(state: State, page: LookupPage, next: LookupPage): State {
+  const position = state.lookup.history.lastIndexOf(page);
   if (position < 0) return state;
-  const updated: LookupPage = { ...page, mined: { ...page.mined, [entryIndex]: status } };
-  const nextHistory = [...history];
-  nextHistory[position] = updated;
-  return { ...state, lookup: { ...state.lookup, history: nextHistory } };
+  const history = [...state.lookup.history];
+  history[position] = next;
+  return { ...state, lookup: { ...state.lookup, history } };
+}
+
+function findPage(state: State, pageId: number): LookupPage | undefined {
+  return state.lookup.history.find((page) => page.id === pageId);
+}
+
+/** One card was just created, so the deck now holds one more note with that term. */
+function bumpDuplicateCount(
+  duplicates: LookupPage['duplicates'],
+  term: string | undefined,
+): LookupPage['duplicates'] {
+  if (duplicates === undefined || duplicates === 'unavailable' || term === undefined) return duplicates;
+  return { ...duplicates, [term]: (duplicates[term] ?? 0) + 1 };
+}
+
+/** Unique headword terms of a page, in entry order and within the API's limit. */
+function duplicateTerms(response: LookupResponse): string[] {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of response.entries) {
+    const term = entry.headwords[0]?.term;
+    if (term === undefined || seen.has(term)) continue;
+    seen.add(term);
+    terms.push(term);
+    if (terms.length >= MAX_DUPLICATE_TERMS) break;
+  }
+  return terms;
 }
 

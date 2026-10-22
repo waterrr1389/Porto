@@ -30,7 +30,7 @@ export function createPanelView(els: PanelElements, dispatch: Dispatch) {
   let styled: readonly DictionaryInfo[] | null = null;
   let shownResponse: LookupResponse | undefined;
   let shownText: string | undefined;
-  let mineButtons: HTMLButtonElement[] = [];
+  let entryControls: EntryControls[] = [];
 
   els.back.addEventListener('click', () => dispatch({ type: 'panelBack' }));
   els.close.addEventListener('click', () => dispatch({ type: 'panelClosed' }));
@@ -64,12 +64,12 @@ export function createPanelView(els: PanelElements, dispatch: Dispatch) {
     if (page?.response !== shownResponse || page?.text !== shownText) {
       shownResponse = page?.response;
       shownText = page?.text;
-      mineButtons = showPage(page);
+      entryControls = showPage(page);
     }
-    updateMineButtons(page, mineButtons);
+    updateEntryControls(page, entryControls);
   };
 
-  function showPage(page: LookupPage | undefined): HTMLButtonElement[] {
+  function showPage(page: LookupPage | undefined): EntryControls[] {
     els.query.textContent = page?.text ?? '';
     els.results.scrollTop = 0;
     const entries = page?.response.entries ?? [];
@@ -79,8 +79,15 @@ export function createPanelView(els: PanelElements, dispatch: Dispatch) {
     }
     const rendered = entries.map((entry, index) => renderEntry(entry, generator, index, dispatch));
     els.results.replaceChildren(...rendered.map(({ box }) => box));
-    return rendered.map(({ mine }) => mine);
+    return rendered.map(({ controls }) => controls);
   }
+}
+
+/** The parts of one entry that duplicate checks and mining update in place. */
+interface EntryControls {
+  mine: HTMLButtonElement;
+  badge: HTMLElement;
+  hint: HTMLElement;
 }
 
 /** Scopes each dictionary's bundled CSS to the definitions it produced. */
@@ -101,7 +108,7 @@ function renderEntry(
   generator: StructuredContentGenerator,
   entryIndex: number,
   dispatch: Dispatch,
-): { box: HTMLElement; mine: HTMLButtonElement } {
+): { box: HTMLElement; controls: EntryControls } {
   const box = el('div', 'entry');
   const head = el('div', 'entry-head');
   const headword = entry.headwords[0];
@@ -114,12 +121,17 @@ function renderEntry(
   for (const other of entry.headwords.slice(1, 4)) {
     head.append(el('span', 'reading', `· ${other.term}`));
   }
+  const badge = el('span', 'dup-badge');
+  badge.hidden = true;
+  head.append(badge);
   const mine = el('button', 'mine', '制卡');
   mine.type = 'button';
   mine.addEventListener('click', () => {
     dispatch({ type: 'mineRequested', entryIndex, definitions: collectDefinitions(box) });
   });
-  head.append(mine);
+  const hint = el('span', 'mine-hint');
+  hint.hidden = true;
+  head.append(mine, hint);
   box.append(head);
 
   const chips = el('div', 'chips');
@@ -154,7 +166,7 @@ function renderEntry(
     box.append(details);
   });
 
-  return { box, mine };
+  return { box, controls: { mine, badge, hint } };
 }
 
 /** Definition HTML is rendered here and sent along; the server never renders it. */
@@ -165,28 +177,47 @@ function collectDefinitions(box: HTMLElement): { dictionary: string; html: strin
   }));
 }
 
-function updateMineButtons(page: LookupPage | undefined, buttons: readonly HTMLButtonElement[]): void {
-  buttons.forEach((button, entryIndex) => {
+function updateEntryControls(page: LookupPage | undefined, controls: readonly EntryControls[]): void {
+  controls.forEach(({ mine, badge, hint }, entryIndex) => {
+    const term = page?.response.entries[entryIndex]?.headwords[0]?.term;
+    const duplicates = page?.duplicates;
+    const count = term !== undefined && typeof duplicates === 'object' ? duplicates[term] ?? 0 : 0;
     const status = page?.mined[entryIndex];
-    button.title = '';
+
+    badge.hidden = count <= 0;
+    if (count > 0) badge.textContent = `已有 ${count} 张`;
+
+    hint.hidden = true;
+    hint.textContent = '';
+    mine.title = '';
+    mine.disabled = false;
+    mine.classList.toggle('secondary', status === undefined && count > 0);
+
     if (status === undefined) {
-      button.textContent = '制卡';
-      button.disabled = false;
+      if (duplicates === 'unavailable') {
+        hint.textContent = 'Anki 未连接';
+        hint.hidden = false;
+      } else if (duplicates === undefined) {
+        hint.textContent = '查重中…';
+        hint.hidden = false;
+      }
+      mine.textContent = count > 0 ? '再制一张' : '制卡';
       return;
     }
+
+    mine.classList.remove('secondary');
     switch (status.status) {
       case 'mining':
-        button.textContent = '制卡中…';
-        button.disabled = true;
+        mine.textContent = '制卡中…';
+        mine.disabled = true;
         break;
       case 'done':
-        button.textContent = status.duplicates > 0 ? `已制卡（已有 ${status.duplicates} 张）` : '已制卡';
-        button.disabled = true;
+        mine.textContent = status.duplicates > 0 ? `已制卡（已有 ${status.duplicates} 张）` : '已制卡';
+        mine.disabled = true;
         break;
       case 'error':
-        button.textContent = '重试';
-        button.disabled = false;
-        button.title = status.message;
+        mine.textContent = '重试';
+        mine.title = status.message;
         break;
     }
   });

@@ -6,6 +6,7 @@ import type {
   CardRequest,
   CardResponse,
   DictionaryInfo,
+  DuplicatesResponse,
   EpisodeResponse,
   LibraryResponse,
   LookupResponse,
@@ -87,6 +88,15 @@ export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Di
           .then((response) => dispatch({ type: 'lookupSucceeded', seq: effect.seq, text: effect.text, response }))
           .catch((error: unknown) => dispatch({ type: 'lookupFailed', seq: effect.seq, message: String(error) }));
         return;
+
+      case 'checkDuplicates': {
+        const params = new URLSearchParams();
+        for (const term of effect.terms) params.append('term', term);
+        getJson<DuplicatesResponse>(`/api/cards/duplicates?${params.toString()}`)
+          .then((counts) => dispatch({ type: 'duplicatesChecked', pageId: effect.pageId, counts }))
+          .catch(() => dispatch({ type: 'duplicatesFailed', pageId: effect.pageId }));
+        return;
+      }
 
       case 'createCard':
         postCard(effect.request)

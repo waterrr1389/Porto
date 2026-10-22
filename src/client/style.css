@@ -53,6 +53,10 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: con
 .chip.freq { background: #3a2f22; color: #e6c79c; }
 .mine { margin-left: auto; font: inherit; font-size: 14px; padding: 6px 12px; border: 0;
   border-radius: 8px; background: #2f6fed; color: #fff; }
+.mine.secondary { background: #2c2c32; color: #ddd; box-shadow: inset 0 0 0 1px #4a4a55; }
+.dup-badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #1e3a2a; color: #9fe0b5; }
+.mine-hint { font-size: 11px; color: #8a8a96; }
+.dup-badge[hidden], .mine-hint[hidden] { display: none; }
 details.dict { margin-top: 10px; }
 details.dict > summary { list-style: none; font-size: 12px; color: #8a8a96; cursor: pointer; }
 details.dict > summary::before { content: '▸ '; }
