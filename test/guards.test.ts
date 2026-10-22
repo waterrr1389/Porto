@@ -28,6 +28,8 @@ function sourceFiles(pattern: string): string[] {
 test('core imports nothing outside core', () => {
   const core = resolve(root, 'src/core');
   for (const file of sourceFiles('src/core/**/*.ts')) {
+    // Unit tests live beside the modules and use node:test; the boundary covers shipped code.
+    if (file.endsWith('.test.ts')) continue;
     for (const spec of importsOf(file)) {
       const ok = spec.startsWith('.') && !relative(core, resolve(dirname(file), spec)).startsWith('..');
       assert.ok(ok, `${relative(root, file)} imports ${spec}`);
