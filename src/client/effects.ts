@@ -35,14 +35,14 @@ export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Di
         return;
 
       case 'fetchSubtitles':
-        fetch(effect.url)
+        fetch(effect.subtitles.url)
           .then((res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.text();
           })
           .then((text) => {
             const styles = effect.track === 'zh' ? { styles: ASS_STYLES.zh } : undefined;
-            dispatch({ type: 'subtitlesLoaded', track: effect.track, cues: parseSubtitles(effect.url, text, styles) });
+            dispatch({ type: 'subtitlesLoaded', track: effect.track, cues: parseSubtitles(effect.subtitles.format, text, styles) });
           })
           .catch((error: unknown) => {
             dispatch({ type: 'subtitlesFailed', track: effect.track, message: String(error) });

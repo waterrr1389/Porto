@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
 import { playerTracks, resumeEpisode, type LibraryEpisode, type LibrarySeries } from '../core/library.ts';
 import { decideRange } from '../core/range.ts';
+import { subtitleFormat } from '../core/subtitles.ts';
 import {
   MAX_LOOKUP_LENGTH,
   type ApiError,
@@ -16,6 +17,7 @@ import {
   type LibraryResponse,
   type LookupResponse,
   type ProgressRequest,
+  type SubtitleTrack,
 } from '../shared/api.ts';
 import { AnkiFailure, EpisodeNotFound } from './mining.ts';
 
@@ -206,15 +208,20 @@ function describeEpisode(
   // playerTracks picks languages; map each picked language to its URL.
   const languageOf = Object.fromEntries(Object.keys(episode.subtitles).map((language) => [language, language]));
   const tracks = playerTracks(languageOf);
-  const subtitleUrl = (language: string) => `/api/episodes/${episode.id}/subtitles/${language}`;
+  const subtitleTrack = (language: string): SubtitleTrack | null => {
+    const format = subtitleFormat(episode.subtitles[language] ?? '');
+    return format && { url: `/api/episodes/${episode.id}/subtitles/${language}`, format };
+  };
+  const ja = tracks.ja === undefined ? null : subtitleTrack(tracks.ja);
+  const zh = tracks.zh === undefined ? null : subtitleTrack(tracks.zh);
   return {
     id: episode.id,
     title: episode.title,
     seriesTitle: series.title,
     video: `/api/episodes/${episode.id}/video`,
     subtitles: {
-      ...(tracks.ja !== undefined ? { ja: subtitleUrl(tracks.ja) } : {}),
-      ...(tracks.zh !== undefined ? { zh: subtitleUrl(tracks.zh) } : {}),
+      ...(ja ? { ja } : {}),
+      ...(zh ? { zh } : {}),
     },
     position: services.progress.progress(episode.id)?.position ?? 0,
     nextEpisodeId: next?.id ?? null,

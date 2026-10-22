@@ -131,15 +131,19 @@ export function parseSrt(source: string): Cue[] {
   return toCues(groups);
 }
 
-/**
- * Picks the parser from the file name extension (.ass/.ssa or .srt); throws on
- * anything else. `options` applies to ASS only.
- */
-export function parseSubtitles(fileName: string, source: string, options?: AssOptions): Cue[] {
+export type SubtitleFormat = 'ass' | 'srt';
+
+/** The format of a subtitle file from its name (.ass/.ssa or .srt), or null. */
+export function subtitleFormat(fileName: string): SubtitleFormat | null {
   const extension = fileName.slice(fileName.lastIndexOf('.') + 1).toLowerCase();
-  if (extension === 'ass' || extension === 'ssa') return parseAss(source, options);
-  if (extension === 'srt') return parseSrt(source);
-  throw new Error(`unsupported subtitle file name: ${fileName}`);
+  if (extension === 'ass' || extension === 'ssa') return 'ass';
+  if (extension === 'srt') return 'srt';
+  return null;
+}
+
+/** Parses subtitles of a known format; `options` applies to ASS only. */
+export function parseSubtitles(format: SubtitleFormat, source: string, options?: AssOptions): Cue[] {
+  return format === 'ass' ? parseAss(source, options) : parseSrt(source);
 }
 
 /** Cues with start <= time < end, in cue order. `cues` must be sorted by start (parsers guarantee this). */

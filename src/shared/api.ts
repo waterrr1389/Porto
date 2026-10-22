@@ -39,11 +39,17 @@ export interface EpisodeResponse {
   seriesTitle: string;
   /** URL of the playable MP4 (GET with byte ranges). */
   video: string;
-  /** URLs of the Japanese and Chinese subtitle files, when present. */
-  subtitles: { ja?: string; zh?: string };
+  /** The Japanese and Chinese subtitle files, when present. */
+  subtitles: { ja?: SubtitleTrack; zh?: SubtitleTrack };
   /** Saved position in seconds. */
   position: number;
   nextEpisodeId: string | null;
+}
+
+/** A subtitle file; its URL carries no extension, so the format is explicit. */
+export interface SubtitleTrack {
+  url: string;
+  format: 'ass' | 'srt';
 }
 
 /** PUT /api/episodes/<id>/progress — answered with 204. */

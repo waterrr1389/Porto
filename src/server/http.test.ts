@@ -242,14 +242,17 @@ test('describes an episode, prewarming it and the next one', async () => {
     title: '01',
     seriesTitle: 'Show',
     video: `/api/episodes/${first.id}/video`,
-    subtitles: { ja: `/api/episodes/${first.id}/subtitles/ja`, zh: `/api/episodes/${first.id}/subtitles/zh-Hant` },
+    subtitles: {
+      ja: { url: `/api/episodes/${first.id}/subtitles/ja`, format: 'ass' },
+      zh: { url: `/api/episodes/${first.id}/subtitles/zh-Hant`, format: 'ass' },
+    },
     position: 0,
     nextEpisodeId: second.id,
   });
   await new Promise((done) => setTimeout(done, 20));
   assert.deepEqual(prewarmed.sort(), [first.id, second.id].sort());
 
-  const subtitles = await fetch(`${base}${episode.subtitles.zh}`);
+  const subtitles = await fetch(`${base}${episode.subtitles.zh?.url}`);
   assert.equal(await subtitles.text(), 'tc');
   assert.equal((await fetch(`${base}/api/episodes/${first.id}/subtitles/en`)).status, 404);
 });

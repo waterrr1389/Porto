@@ -14,6 +14,7 @@ import {
   type EpisodeResponse,
   type LibraryResponse,
   type LookupResponse,
+  type SubtitleTrack,
 } from '../shared/api.ts';
 
 export type Track = 'ja' | 'zh';
@@ -23,7 +24,7 @@ export type Screen = 'library' | 'player';
 
 export interface Episode {
   video: string;
-  subtitles: Partial<Record<Track, string>>;
+  subtitles: Partial<Record<Track, SubtitleTrack>>;
 }
 
 /** Where the currently pending lookup started: a tap on this cue, or in the panel. */
@@ -141,7 +142,7 @@ export type Timer = 'hideControls' | 'stall' | 'clearNotice' | 'saveProgress';
 
 export type Effect =
   | { type: 'loadVideo'; url: string }
-  | { type: 'fetchSubtitles'; track: Track; url: string }
+  | { type: 'fetchSubtitles'; track: Track; subtitles: SubtitleTrack }
   | { type: 'fetchDictionaries' }
   | { type: 'fetchLibrary' }
   | { type: 'fetchEpisode'; id: string }
@@ -490,8 +491,8 @@ function sameIds(a: readonly number[], b: readonly number[]): boolean {
 function openEpisodeEffects(episode: Episode): Effect[] {
   const effects: Effect[] = [{ type: 'loadVideo', url: episode.video }];
   for (const track of ['ja', 'zh'] as const) {
-    const url = episode.subtitles[track];
-    if (url) effects.push({ type: 'fetchSubtitles', track, url });
+    const subtitles = episode.subtitles[track];
+    if (subtitles) effects.push({ type: 'fetchSubtitles', track, subtitles });
   }
   return effects;
 }

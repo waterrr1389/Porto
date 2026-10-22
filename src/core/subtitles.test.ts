@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activeCues, parseAss, parseSrt, parseSubtitles } from './subtitles.ts';
+import { activeCues, parseAss, parseSrt, parseSubtitles, subtitleFormat } from './subtitles.ts';
 
 const FORMAT = 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text';
 const DIALOGUE = 'Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,%s';
@@ -220,15 +220,17 @@ test('parseSrt returns an empty list for empty input', () => {
   assert.deepEqual(parseAss(''), []);
 });
 
-test('parseSubtitles selects the parser by extension', () => {
+test('formats come from file names and select the parser', () => {
   const assSource = ass(DIALOGUE.replace('%s', 'ass text'));
   const srtSource = ['00:00:01,000 --> 00:00:02,000', 'srt text', ''].join('\n');
 
-  assert.deepEqual(parseSubtitles('episode.ass', assSource), parseAss(assSource));
-  assert.deepEqual(parseSubtitles('episode.SSA', assSource), parseAss(assSource));
-  assert.deepEqual(parseSubtitles('episode.srt', srtSource), parseSrt(srtSource));
-  assert.throws(() => parseSubtitles('episode.txt', srtSource));
-  assert.throws(() => parseSubtitles('episode', srtSource));
+  assert.equal(subtitleFormat('episode.ass'), 'ass');
+  assert.equal(subtitleFormat('episode.SSA'), 'ass');
+  assert.equal(subtitleFormat('episode.srt'), 'srt');
+  assert.equal(subtitleFormat('episode.txt'), null);
+  assert.equal(subtitleFormat('/api/episodes/1/subtitles/zh'), null);
+  assert.deepEqual(parseSubtitles('ass', assSource), parseAss(assSource));
+  assert.deepEqual(parseSubtitles('srt', srtSource), parseSrt(srtSource));
 });
 
 test('activeCues includes start and excludes end', () => {

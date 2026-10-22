@@ -30,7 +30,10 @@ function run(state: State, ...actions: Action[]): { state: State; effects: Effec
   return { state, effects };
 }
 
-const episode = { video: '/v.mp4', subtitles: { ja: '/v.ja.ass', zh: '/v.sc.ass' } };
+const episode = {
+  video: '/v.mp4',
+  subtitles: { ja: { url: '/v/ja', format: 'ass' as const }, zh: { url: '/v/zh', format: 'srt' as const } },
+};
 const opened = run(initialState, { type: 'episodeOpened', episode }).state;
 const playing = run(opened, { type: 'videoPlayed' }).state;
 
@@ -39,8 +42,8 @@ test('opening an episode loads the video and both subtitle tracks', () => {
   assert.equal(state.episode, episode);
   assert.deepEqual(effects, [
     { type: 'loadVideo', url: '/v.mp4' },
-    { type: 'fetchSubtitles', track: 'ja', url: '/v.ja.ass' },
-    { type: 'fetchSubtitles', track: 'zh', url: '/v.sc.ass' },
+    { type: 'fetchSubtitles', track: 'ja', subtitles: { url: '/v/ja', format: 'ass' } },
+    { type: 'fetchSubtitles', track: 'zh', subtitles: { url: '/v/zh', format: 'srt' } },
   ]);
 });
 
@@ -330,7 +333,7 @@ const firstEpisode: EpisodeResponse = {
   title: '第1话',
   seriesTitle: 'Show',
   video: '/api/episodes/e1/video',
-  subtitles: { ja: '/api/episodes/e1/subtitles/ja' },
+  subtitles: { ja: { url: '/api/episodes/e1/subtitles/ja', format: 'ass' as const } },
   position: 42,
   nextEpisodeId: 'e2',
 };
@@ -382,7 +385,7 @@ test('episodeLoaded builds the player state and reuses the load effects', () => 
   assert.equal(state.currentEpisode, firstEpisode);
   assert.deepEqual(state.episode, {
     video: '/api/episodes/e1/video',
-    subtitles: { ja: '/api/episodes/e1/subtitles/ja' },
+    subtitles: { ja: { url: '/api/episodes/e1/subtitles/ja', format: 'ass' as const } },
   });
   assert.equal(state.pendingStartPosition, 42);
   assert.equal(state.notice, '准备中…');
@@ -391,7 +394,7 @@ test('episodeLoaded builds the player state and reuses the load effects', () => 
     { type: 'cancelTimer', timer: 'clearNotice' },
     { type: 'cancelTimer', timer: 'saveProgress' },
     { type: 'loadVideo', url: '/api/episodes/e1/video' },
-    { type: 'fetchSubtitles', track: 'ja', url: '/api/episodes/e1/subtitles/ja' },
+    { type: 'fetchSubtitles', track: 'ja', subtitles: { url: '/api/episodes/e1/subtitles/ja', format: 'ass' } },
   ]);
 });
 
