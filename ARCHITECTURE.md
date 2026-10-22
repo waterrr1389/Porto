@@ -41,6 +41,7 @@ the whole contract; nothing imports a module's other files.
 | `subtitles` | Parse ASS/SRT into `Cue[]`; cues active at a time; merge pieces that share a time span. |
 | `scan` | From a tap position in a cue, the text to look up; from a match length, the characters to highlight. |
 | `library` | From a directory listing, which files are episodes of which series and which subtitle files belong to each, by language. |
+| `css` | Scope a dictionary's bundled stylesheet to that dictionary's definitions. |
 | `range` | From an HTTP Range header and a file size, whether to answer 200, 206 with a byte range, or 416. |
 | `card` | From the looked-up term, the current cue, the rendered definition HTML and a field template: the Anki note fields and the screenshot time / audio clip window. Never renders HTML itself. |
 
