@@ -164,6 +164,27 @@ test('counts each query among the union candidates with one multi request', asyn
   }
 });
 
+test('sends the api key with every action inside multi', async () => {
+  const server = await fakeAnki((request) => {
+    if (request.action === 'findNotes') return { result: [1, 2], error: null };
+    return { result: [[1], [2]], error: null };
+  });
+  try {
+    const anki = createAnki({ url: server.url, apiKey: 'secret', deck: 'JP', model: 'Lapis' });
+    await anki.findNotesBatch(['Expression:"a"', 'Expression:"b"']);
+    const actions = server.requests[1]?.params.actions as { key?: string; version?: number }[];
+    assert.deepEqual(
+      actions.map((action) => [action.key, action.version]),
+      [
+        ['secret', 6],
+        ['secret', 6],
+      ],
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 test('answers a single query from the union without a multi request', async () => {
   const server = await fakeAnki(() => ({ result: [7, 8], error: null }));
   try {

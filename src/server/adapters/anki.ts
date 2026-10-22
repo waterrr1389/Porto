@@ -30,13 +30,18 @@ const TIMEOUT_MS = 5000;
 export function createAnki(options: AnkiOptions): Anki {
   const doFetch = options.fetch ?? fetch;
 
-  async function invoke(action: string, params: unknown): Promise<unknown> {
-    const body = {
+  /** AnkiConnect checks the key on every action, including each one inside `multi`. */
+  function request(action: string, params: unknown) {
+    return {
       action,
       version: ANKI_CONNECT_VERSION,
       ...(options.apiKey === null ? {} : { key: options.apiKey }),
       params,
     };
+  }
+
+  async function invoke(action: string, params: unknown): Promise<unknown> {
+    const body = request(action, params);
 
     let response: Response;
     try {
@@ -110,7 +115,7 @@ export function createAnki(options: AnkiOptions): Anki {
 
     const filter = `nid:${candidates.join(',')}`;
     const result = await invoke('multi', {
-      actions: queries.map((query) => ({ action: 'findNotes', params: { query: `${filter} (${query})` } })),
+      actions: queries.map((query) => request('findNotes', { query: `${filter} (${query})` })),
     });
     if (!Array.isArray(result) || result.length < queries.length) {
       throw new Error('AnkiConnect multi returned no results');
