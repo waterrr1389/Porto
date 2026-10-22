@@ -79,6 +79,29 @@ ffmpeg([
   source,
 ]);
 
+// A wide source proves screenshots are downscaled to 1280 px instead of only
+// never being upscaled.
+const wideSource = join(work, 'wide.mp4');
+ffmpeg([
+  '-nostdin',
+  '-v',
+  'error',
+  '-y',
+  '-f',
+  'lavfi',
+  '-i',
+  'testsrc2=size=1920x1080:rate=10:duration=1',
+  '-c:v',
+  'libx264',
+  '-preset',
+  'ultrafast',
+  '-pix_fmt',
+  'yuv420p',
+  '-t',
+  '1',
+  wideSource,
+]);
+
 test('remuxes into a faststart mp4 with the japanese audio track', async (t) => {
   const cache = createMediaCache({ dir: join(work, 'cache-main'), limitBytes: 1_000_000_000 });
   const output = await cache.prepare('a1', source);
@@ -223,11 +246,60 @@ test('rejects keys that are not episode ids', async () => {
   assert.deepEqual(await readdir(dir), []);
 });
 
+test('extracts a screenshot as a scaled JPEG', async () => {
+  const cache = createMediaCache({ dir: join(work, 'cache-screenshot'), limitBytes: 1_000_000_000 });
+
+  const small = join(work, 'small.jpg');
+  await cache.screenshot(source, 1, small);
+  const smallFrame = probeStreams(small).streams[0];
+  assert.equal(smallFrame?.codec_name, 'mjpeg');
+  assert.equal(smallFrame?.width, 160);
+
+  const wide = join(work, 'wide.jpg');
+  await cache.screenshot(wideSource, 0.5, wide);
+  const wideFrame = probeStreams(wide).streams[0];
+  assert.equal(wideFrame?.codec_name, 'mjpeg');
+  assert.equal(wideFrame?.width, 1280);
+  assert.equal(wideFrame?.height, 720);
+  assert.deepEqual(
+    (await readdir(work)).filter((name) => name.endsWith('.jpg.tmp')),
+    [],
+  );
+});
+
+test('extracts an mp3 clip of the selected audio track', async () => {
+  const cache = createMediaCache({ dir: join(work, 'cache-audio'), limitBytes: 1_000_000_000 });
+  const output = join(work, 'clip.mp3');
+  await cache.audioClip(source, 0.5, 1.5, output);
+
+  const streams = probeStreams(output).streams;
+  assert.equal(streams.length, 1);
+  assert.equal(streams[0]?.codec_name, 'mp3');
+  const seconds = duration(output);
+  assert.ok(Math.abs(seconds - 1) <= 0.1, String(seconds));
+  assert.ok(!(await readdir(work)).includes('clip.mp3.tmp'));
+});
+
+test('leaves no file when a screenshot or clip fails', async () => {
+  const cache = createMediaCache({ dir: join(work, 'cache-media-failure'), limitBytes: 1_000_000_000 });
+  const bad = join(work, 'broken-source.mkv');
+  await writeFile(bad, 'no media here\n');
+
+  await assert.rejects(cache.screenshot(bad, 0, join(work, 'failed.jpg')), /ffmpeg failed/);
+  await assert.rejects(cache.audioClip(bad, 0, 1, join(work, 'failed.mp3')), /ffprobe failed/);
+  assert.deepEqual(
+    (await readdir(work)).filter((name) => name.startsWith('failed')),
+    [],
+  );
+});
+
 interface StreamInfo {
   index: number;
   codec_type?: string;
   codec_name?: string;
   codec_tag_string?: string;
+  width?: number;
+  height?: number;
   tags?: { language?: string };
 }
 

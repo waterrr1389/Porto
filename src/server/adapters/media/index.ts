@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { captureFrame, encodeAudioClip } from './frames.ts';
 import { createFileLru } from './lru.ts';
 import { probeStreams } from './probe.ts';
 import { remuxToMp4 } from './remux.ts';
@@ -31,6 +32,10 @@ export interface MediaCache {
   prewarm(key: string, source: string): void;
   /** Whether a completed file exists for key (no remux). */
   isReady(key: string): boolean;
+  /** Extracts a JPEG frame at `time` from `source` into `output` (scaled to max 1280 px wide, quality ~ -q:v 3). */
+  screenshot(source: string, time: number, output: string): Promise<void>;
+  /** Extracts [start, end) of the selected audio stream (same selection as remux: first jpn audio) into an MP3 at `output` (libmp3lame, -q:a 4, mono not required). */
+  audioClip(source: string, start: number, end: number, output: string): Promise<void>;
 }
 
 const episodeKey = /^[0-9a-f]+$/;
@@ -98,6 +103,13 @@ export function createMediaCache(options: MediaCacheOptions): MediaCache {
     },
     isReady(key) {
       return episodeKey.test(key) && existsSync(fileOf(key));
+    },
+    async screenshot(source, time, output) {
+      await captureFrame({ ffmpeg, source, time, output });
+    },
+    async audioClip(source, start, end, output) {
+      const streams = await probeStreams(ffprobe, source);
+      await encodeAudioClip({ ffmpeg, source, audio: streams.audio, start, end, output });
     },
   };
 }
