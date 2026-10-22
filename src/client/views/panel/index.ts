@@ -201,7 +201,8 @@ function updateEntryControls(page: LookupPage | undefined, controls: readonly En
         hint.textContent = '查重中…';
         hint.hidden = false;
       }
-      mine.textContent = count > 0 ? '再制一张' : '制卡';
+      // The badge already says how many exist; the grey button only signals it.
+      mine.textContent = '制卡';
       return;
     }
 
