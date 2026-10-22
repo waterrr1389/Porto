@@ -19,7 +19,7 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: con
   transition: bottom .2s; }
 /* Lift the subtitles clear of the control bar while it is visible. */
 #view.bar-shown #ja { bottom: calc(80px + env(safe-area-inset-bottom)); }
-#zh { top: 6%; font-size: clamp(16px, 2.4vw, 30px); color: #ffd6ec; font-weight: 600; }
+#zh { top: calc(6% + env(safe-area-inset-top)); font-size: clamp(16px, 2.4vw, 30px); color: #ffd6ec; font-weight: 600; }
 #stage.panel-open #ja { font-size: clamp(20px, 2.8vw, 38px); }
 .subs .line { display: block; white-space: pre-wrap;
   paint-order: stroke fill; -webkit-text-stroke: 0.18em rgba(0,0,0,.85); }
@@ -29,7 +29,8 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: con
 #panel { position: absolute; background: #1c1c20; color: #e8e8ea; overflow: hidden;
   display: flex; flex-direction: column; transition: transform .25s ease;
   -webkit-user-select: text; user-select: text; }
-#stage.landscape #panel { top: 0; right: 0; bottom: 0; width: min(40%, 520px);
+/* The home-screen app draws a translucent status bar over the page; keep the panel head below it. */
+#stage.landscape #panel { top: 0; right: 0; bottom: 0; width: min(40%, 520px); padding-top: env(safe-area-inset-top);
   border-left: 1px solid #333; transform: translateX(100%); }
 #stage.portrait #panel { left: 0; right: 0; bottom: 0; height: 55%;
   border-top: 1px solid #333; border-radius: 14px 14px 0 0; transform: translateY(100%); }
@@ -106,7 +107,7 @@ details.dict[open] > summary::before { content: '▾ '; }
 #bar #library, #bar #next { font-size: 15px; padding: 0 12px; white-space: nowrap; }
 #seek { flex: 1; accent-color: #2f6fed; height: 32px; min-width: 0; }
 #time { font-variant-numeric: tabular-nums; font-size: 14px; color: #ccc; }
-#notice { position: absolute; top: 6px; left: 8px; font-size: 12px; color: #8f8; pointer-events: none;
+#notice { position: absolute; top: calc(6px + env(safe-area-inset-top)); left: 8px; font-size: 12px; color: #8f8; pointer-events: none;
   z-index: 3; }
 
 /* Keep the player bar usable with the library and next-episode buttons on a phone. */
