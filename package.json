@@ -10,7 +10,8 @@
     "test": "node --test \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
     "build:yomitan": "node scripts/build-yomitan-libs.ts",
     "start": "node src/server/main.ts",
-    "import-dicts": "node scripts/import-dicts.ts"
+    "import-dicts": "node scripts/import-dicts.ts",
+    "build": "node scripts/build-client.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

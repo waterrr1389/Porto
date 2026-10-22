@@ -1,0 +1,35 @@
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: #000; color: #fff;
+  font-family: -apple-system, "Hiragino Sans", "PingFang SC", sans-serif; }
+#stage { position: relative; width: 100%; height: 100dvh; background: #000;
+  overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  --panel-w: 0px; --panel-h: 0px; }
+
+/* The picture shrinks away from the panel instead of being covered by it. */
+#view { position: absolute; top: 0; left: 0; right: var(--panel-w); bottom: var(--panel-h);
+  transition: right .25s ease, bottom .25s ease; }
+video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+#tap { position: absolute; inset: 0; }
+
+.subs { position: absolute; left: 4%; right: 4%; text-align: center; pointer-events: none; }
+#ja { bottom: 9%; font-size: clamp(18px, 3.6vw, 44px); line-height: 1.35; font-weight: 600;
+  transition: bottom .2s; }
+/* Lift the subtitles clear of the control bar while it is visible. */
+#view.bar-shown #ja { bottom: calc(80px + env(safe-area-inset-bottom)); }
+#zh { top: 6%; font-size: clamp(16px, 2.4vw, 30px); color: #ffd6ec; font-weight: 600; }
+.subs .line { display: block; white-space: pre-wrap;
+  paint-order: stroke fill; -webkit-text-stroke: 0.18em rgba(0,0,0,.85); }
+#ja .ch { pointer-events: auto; cursor: pointer; border-radius: 4px; }
+#ja .ch.hit { background: rgba(80,160,255,.6); -webkit-text-stroke: 0; }
+
+#bar { position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 10px max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: flex; gap: 12px; align-items: center;
+  background: linear-gradient(transparent, rgba(0,0,0,.75)); transition: opacity .2s; }
+#bar.hidden { opacity: 0; pointer-events: none; }
+#bar button { font-size: 20px; min-width: 48px; min-height: 48px; border: 0; border-radius: 24px;
+  background: rgba(255,255,255,.15); color: #fff; }
+#bar button[hidden] { display: none; }
+#seek { flex: 1; accent-color: #2f6fed; height: 32px; min-width: 0; }
+#time { font-variant-numeric: tabular-nums; font-size: 14px; color: #ccc; }
+#notice { position: absolute; top: 6px; left: 8px; font-size: 12px; color: #8f8; pointer-events: none; }

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>SLA</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="stage">
+  <div id="view" class="bar-shown">
+    <!-- playsinline keeps iPhone from taking the video fullscreen without the overlays. -->
+    <video id="video" playsinline webkit-playsinline preload="metadata"></video>
+    <div id="tap"></div>
+    <div id="zh" class="subs"></div>
+    <div id="ja" class="subs"></div>
+    <div id="bar">
+      <button id="play">▶</button>
+      <input id="seek" type="range" min="0" value="0">
+      <span id="time">0:00 / 0:00</span>
+      <button id="fullscreen">⛶</button>
+    </div>
+  </div>
+  <div id="notice"></div>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

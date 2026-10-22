@@ -68,7 +68,7 @@ depend on each other only through this file.
 | `state.ts` | `State`, `Action`, `Effect`, and `reduce(state, action) => {state, effects}`. The only global state. |
 | `main.ts` | The loop: events become actions, `reduce` produces the next state and a list of effects, views render the state, effects run. |
 | `effects.ts` | Executes `Effect` values: fetch, video element commands, timers. Results come back as actions. |
-| `views/*` | `render(state, dispatch)` per region: player, subtitles, lookup panel, controls. No state of their own beyond the DOM. |
+| `views/*` | One per region (player with controls, subtitles, lookup panel): a factory binds DOM events to `dispatch` and returns `render(state)`. No state of their own beyond the DOM. |
 
 **State and the `<video>` element.** The video element is the single source of
 truth for `currentTime`, `paused` and buffering; `State` never stores them.
