@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Local data: media, dictionaries and their imported databases
+media/
+dicts/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Runtime and generated output
+cache/
+state/
+vendor-build/
+*.tmp
+*.log
+
+# Media files anywhere in the tree
+*.mp4
+*.mkv
+*.m4a
+*.flac
+*.ass
+*.srt
+
+# Local environment
+.env
+.env.*
+
+# Editor and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
