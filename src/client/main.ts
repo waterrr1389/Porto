@@ -5,12 +5,19 @@ import { canFullscreen, createEffectRunner } from './effects.ts';
 import { initialState, reduce, type Action, type Episode, type State } from './state.ts';
 import { createPlayerView } from './views/player.ts';
 import { createSubtitlesView } from './views/subtitles.ts';
+import { createPanelView } from './views/panel/index.ts';
 import './style.css';
 
 const byId = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
   if (!el) throw new Error(`missing #${id}`);
   return el as T;
+};
+
+const bySelector = <T extends Element>(selector: string): T => {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`missing ${selector}`);
+  return element;
 };
 
 const stage = byId('stage');
@@ -55,7 +62,17 @@ const views = [
     dispatch,
     canFullscreen(stage),
   ),
-  createSubtitlesView({ ja: byId('ja'), zh: byId('zh') }),
+  createSubtitlesView({ ja: byId('ja'), zh: byId('zh') }, dispatch),
+  createPanelView(
+    {
+      stage,
+      back: byId<HTMLButtonElement>('back'),
+      query: bySelector('#panel-head .query'),
+      close: byId<HTMLButtonElement>('close'),
+      results: byId('results'),
+    },
+    dispatch,
+  ),
 ];
 
 // Dispatches only when the set of cues on screen changes, not every frame.
@@ -84,5 +101,6 @@ const demoEpisode: Episode = {
 };
 
 for (const render of views) render(state);
+dispatch({ type: 'started' });
 dispatch({ type: 'episodeOpened', episode: demoEpisode });
 requestAnimationFrame(frame);

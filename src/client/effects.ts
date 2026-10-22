@@ -1,6 +1,7 @@
 // Carries out Effects: network, video element commands, fullscreen and
 // timers. Results come back only as dispatched Actions.
 import { parseSubtitles } from '../core/subtitles.ts';
+import type { DictionaryInfo, LookupResponse } from '../shared/api.ts';
 import type { Action, Effect, Timer } from './state.ts';
 
 export type Dispatch = (action: Action) => void;
@@ -37,6 +38,18 @@ export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Di
           .catch((error: unknown) => {
             dispatch({ type: 'subtitlesFailed', track: effect.track, message: String(error) });
           });
+        return;
+
+      case 'fetchDictionaries':
+        getJson<DictionaryInfo[]>('/api/dictionaries')
+          .then((dictionaries) => dispatch({ type: 'dictionariesLoaded', dictionaries }))
+          .catch((error: unknown) => dispatch({ type: 'dictionariesFailed', message: String(error) }));
+        return;
+
+      case 'lookup':
+        getJson<LookupResponse>(`/api/lookup?text=${encodeURIComponent(effect.text)}`)
+          .then((response) => dispatch({ type: 'lookupSucceeded', seq: effect.seq, text: effect.text, response }))
+          .catch((error: unknown) => dispatch({ type: 'lookupFailed', seq: effect.seq, message: String(error) }));
         return;
 
       case 'play':
@@ -90,6 +103,12 @@ interface WebkitFullscreen {
   webkitFullscreenElement?: Element | null;
   webkitExitFullscreen?: () => void;
   webkitRequestFullscreen?: () => void;
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as T;
 }
 
 /** iPad Safari only has the prefixed API; iPhone has none for elements. */
