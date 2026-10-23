@@ -30,7 +30,9 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: con
   display: flex; flex-direction: column; transition: transform .25s ease;
   -webkit-user-select: text; user-select: text; }
 /* The home-screen app draws a translucent status bar over the page; keep the panel head below it. */
-#stage.landscape #panel { top: 0; right: 0; bottom: 0; width: min(40%, 520px); padding-top: env(safe-area-inset-top);
+#stage.landscape #panel { top: 0; right: 0; bottom: 0; width: min(40%, 520px);
+  /* iPadOS fades content for a while below the status bar, beyond the safe area itself. */
+  padding-top: calc(env(safe-area-inset-top) + 20px);
   border-left: 1px solid #333; transform: translateX(100%); }
 #stage.portrait #panel { left: 0; right: 0; bottom: 0; height: 55%;
   border-top: 1px solid #333; border-radius: 14px 14px 0 0; transform: translateY(100%); }
