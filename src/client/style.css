@@ -88,7 +88,22 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: con
 #panel-head button:disabled { opacity: .3; }
 #results { flex: 1; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch; padding: 4px 14px 40px;
-  font-size: 15px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+  font-size: 15px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere;
+  /* Yomitan's structured-content stylesheet sizes images with 1em = 1px and
+     reads its theme from these variables; dictionary stylesheets use them too. */
+  --font-size-no-units: 15;
+  --line-height: 1.55;
+  --accent-color: var(--accent);
+  --accent-color-dark: var(--accent);
+  --link-color: var(--accent);
+  --text-color: var(--text);
+  --text-color-light2: var(--text-muted);
+  --text-color-light3: var(--text-muted);
+  --headword-reading-text-color: var(--text-muted);
+  --light-border-color: var(--border);
+  --medium-border-color: var(--border);
+  --tag-dictionary-background-color: var(--surface-2);
+  --gloss-image-background-color: transparent; }
 /* Dictionary content must never widen the panel: wide images and tables shrink to fit. */
 #results img, #results svg, #results canvas, #results table { max-width: 100%; }
 #results .gloss-image-link, #results .gloss-image-container { max-width: 100%; }
