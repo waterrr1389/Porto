@@ -103,7 +103,7 @@ ffmpeg([
 ]);
 
 test('remuxes into a faststart mp4 with the japanese audio track', async (t) => {
-  const cache = createMediaCache({ dir: join(work, 'cache-main'), limitBytes: 1_000_000_000 });
+  const cache = createMediaCache({ dir: join(work, 'cache-main'), limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
   const output = await cache.prepare('a1', source);
   assert.equal(output, join(work, 'cache-main', 'a1.mp4'));
   assert.equal(cache.isReady('a1'), true);
@@ -138,7 +138,7 @@ test('concurrent prepares for one key share a single remux', async () => {
   const log = join(work, 'concurrent.log');
   await writeFile(log, '');
   const wrapper = await writeFfmpegWrapper('concurrent', log);
-  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000, ffmpeg: wrapper });
+  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs'), ffmpeg: wrapper });
 
   const [first, second] = await Promise.all([cache.prepare('b1', source), cache.prepare('b1', source)]);
   assert.equal(first, second);
@@ -154,7 +154,7 @@ test('reuses a completed file and rebuilds after the source is touched', async (
   await copyFile(source, reusedSource);
   await writeFile(log, '');
   const wrapper = await writeFfmpegWrapper('reuse', log);
-  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000, ffmpeg: wrapper });
+  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs'), ffmpeg: wrapper });
 
   const first = await cache.prepare('c1', reusedSource);
   const firstStats = await stat(first);
@@ -178,7 +178,7 @@ test('rejects a source that is not media and leaves nothing behind', async () =>
   const dir = join(work, 'cache-failure');
   const bad = join(work, 'not-media.mkv');
   await writeFile(bad, 'this is not a video\n');
-  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000 });
+  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
 
   await assert.rejects(cache.prepare('d1', bad), /ffprobe failed|ffmpeg failed/);
   assert.deepEqual(await readdir(dir), []);
@@ -189,7 +189,7 @@ test('prewarm logs failures instead of throwing them', async () => {
   const dir = join(work, 'cache-prewarm');
   const bad = join(work, 'prewarm-bad.mkv');
   await writeFile(bad, 'not a video either\n');
-  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000 });
+  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
 
   const logged: unknown[][] = [];
   const original = console.error;
@@ -206,13 +206,13 @@ test('prewarm logs failures instead of throwing them', async () => {
 
 test('evicts the least recently used file when over the limit', async () => {
   const dir = join(work, 'cache-lru');
-  const roomy = createMediaCache({ dir, limitBytes: 1_000_000_000 });
+  const roomy = createMediaCache({ dir, limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
   const one = await roomy.prepare('e1', source);
   await roomy.prepare('e2', source);
   const size = (await stat(one)).size;
 
   // Room for two of the three files: the oldest must go, not the newest.
-  const limited = createMediaCache({ dir, limitBytes: Math.floor(size * 2.5) });
+  const limited = createMediaCache({ dir, limitBytes: Math.floor(size * 2.5), thumbsDir: join(work, 'thumbs') });
   await limited.prepare('e3', source);
   assert.equal(limited.isReady('e1'), false);
   assert.equal(limited.isReady('e2'), true);
@@ -221,7 +221,7 @@ test('evicts the least recently used file when over the limit', async () => {
 
 test('never evicts the file it just produced', async () => {
   const dir = join(work, 'cache-tiny');
-  const cache = createMediaCache({ dir, limitBytes: 1 });
+  const cache = createMediaCache({ dir, limitBytes: 1, thumbsDir: join(work, 'thumbs') });
   const output = await cache.prepare('f1', source);
   assert.equal(cache.isReady('f1'), true);
   assert.deepEqual(await readdir(dir), ['f1.mp4']);
@@ -232,13 +232,13 @@ test('removes temporary files left by a crash on startup', async () => {
   const dir = join(work, 'cache-stale');
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'dead.mp4.tmp'), 'incomplete');
-  createMediaCache({ dir, limitBytes: 1_000_000_000 });
+  createMediaCache({ dir, limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
   assert.deepEqual(await readdir(dir), []);
 });
 
 test('rejects keys that are not episode ids', async () => {
   const dir = join(work, 'cache-key');
-  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000 });
+  const cache = createMediaCache({ dir, limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
   for (const key of ['', 'A1', 'a/b', '../a1', 'a1.mp4']) {
     await assert.rejects(cache.prepare(key, source), /invalid media key/);
     assert.equal(cache.isReady(key), false);
@@ -247,7 +247,7 @@ test('rejects keys that are not episode ids', async () => {
 });
 
 test('extracts a screenshot as a scaled JPEG', async () => {
-  const cache = createMediaCache({ dir: join(work, 'cache-screenshot'), limitBytes: 1_000_000_000 });
+  const cache = createMediaCache({ dir: join(work, 'cache-screenshot'), limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
 
   const small = join(work, 'small.jpg');
   await cache.screenshot(source, 1, small);
@@ -268,7 +268,7 @@ test('extracts a screenshot as a scaled JPEG', async () => {
 });
 
 test('extracts an mp3 clip of the selected audio track', async () => {
-  const cache = createMediaCache({ dir: join(work, 'cache-audio'), limitBytes: 1_000_000_000 });
+  const cache = createMediaCache({ dir: join(work, 'cache-audio'), limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
   const output = join(work, 'clip.mp3');
   await cache.audioClip(source, 0.5, 1.5, output);
 
@@ -281,7 +281,7 @@ test('extracts an mp3 clip of the selected audio track', async () => {
 });
 
 test('leaves no file when a screenshot or clip fails', async () => {
-  const cache = createMediaCache({ dir: join(work, 'cache-media-failure'), limitBytes: 1_000_000_000 });
+  const cache = createMediaCache({ dir: join(work, 'cache-media-failure'), limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs') });
   const bad = join(work, 'broken-source.mkv');
   await writeFile(bad, 'no media here\n');
 
@@ -291,6 +291,65 @@ test('leaves no file when a screenshot or clip fails', async () => {
     (await readdir(work)).filter((name) => name.startsWith('failed')),
     [],
   );
+});
+
+test('extracts a thumbnail JPEG and reuses it while it is fresh', async () => {
+  const thumbs = join(work, 'thumbs-reuse');
+  const cache = createMediaCache({
+    dir: join(work, 'cache-thumbs'),
+    thumbsDir: thumbs,
+    limitBytes: 1_000_000_000,
+  });
+
+  const output = await cache.thumbnail('a1', source);
+  assert.equal(output, join(thumbs, 'a1.jpg'));
+  const bytes = await readFile(output);
+  assert.deepEqual([...bytes.subarray(0, 2)], [0xff, 0xd8], 'JPEG SOI');
+  const frame = probeStreams(output).streams[0];
+  assert.equal(frame?.codec_name, 'mjpeg');
+  assert.ok((frame?.width ?? 0) <= 1280);
+
+  const first = await stat(output);
+  await sleep(20);
+  assert.equal(await cache.thumbnail('a1', source), output);
+  assert.equal((await stat(output)).mtimeMs, first.mtimeMs);
+});
+
+test('concurrent thumbnails for one key share a single run', async () => {
+  const thumbs = join(work, 'thumbs-concurrent');
+  const log = join(work, 'thumbs.log');
+  await writeFile(log, '');
+  const wrapper = await writeFfmpegWrapper('thumbs', log);
+  const cache = createMediaCache({
+    dir: join(work, 'cache-thumbs-concurrent'),
+    thumbsDir: thumbs,
+    limitBytes: 1_000_000_000,
+    ffmpeg: wrapper,
+  });
+
+  const [first, second] = await Promise.all([cache.thumbnail('a2', source), cache.thumbnail('a2', source)]);
+  assert.equal(first, second);
+  assert.equal(await calls(log), 1);
+  assert.deepEqual(await readdir(thumbs), ['a2.jpg']);
+});
+
+test('rejects a thumbnail for a bad source and leaves nothing', async () => {
+  const thumbs = join(work, 'thumbs-failure');
+  await mkdir(thumbs, { recursive: true });
+  await writeFile(join(thumbs, 'dead.jpg.tmp'), 'partial');
+  const bad = join(work, 'thumbs-bad.mkv');
+  await writeFile(bad, 'no media here\n');
+
+  const cache = createMediaCache({
+    dir: join(work, 'cache-thumbs-failure'),
+    thumbsDir: thumbs,
+    limitBytes: 1_000_000_000,
+  });
+  assert.deepEqual(await readdir(thumbs), [], 'stale .tmp files are removed on startup');
+
+  await assert.rejects(cache.thumbnail('a3', bad), /ffprobe failed/);
+  await assert.rejects(cache.thumbnail('../a3', source), /invalid media key/);
+  assert.deepEqual(await readdir(thumbs), []);
 });
 
 interface StreamInfo {

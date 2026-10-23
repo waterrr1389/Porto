@@ -350,7 +350,7 @@ const library: LibraryResponse = {
     {
       id: 's1',
       title: 'Show',
-      episodes: [{ id: 'e1', title: '第1话', languages: ['ja'], position: 42, duration: 1400 }],
+      episodes: [{ id: 'e1', title: '第1话', languages: ['ja'], position: 42, duration: 1400, thumbnail: '/api/episodes/e1/thumbnail' }],
     },
   ],
   resume: { episodeId: 'e1', seriesTitle: 'Show', episodeTitle: '第1话', position: 42 },

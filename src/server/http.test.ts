@@ -90,6 +90,7 @@ before(async () => {
   const media = {
     prepare: async (_key: string, source: string) => source,
     prewarm: (key: string) => void prewarmed.push(key),
+    thumbnail: async (_key: string, source: string) => source,
   };
   const library = createLibrary([root]);
   const cards = { mine: async () => ({ noteId: 0, duplicates: 0 }), duplicates: async () => ({}) };
@@ -169,7 +170,11 @@ before(async () => {
 
   cardStore = openStore(cardStateDir);
   cardLibrary = createLibrary([cardRoot]);
-  const cardMedia = createMediaCache({ dir: join(cardCache, 'media'), limitBytes: 1_000_000_000 });
+  const cardMedia = createMediaCache({
+    dir: join(cardCache, 'media'),
+    thumbsDir: join(cardCache, 'thumbs'),
+    limitBytes: 1_000_000_000,
+  });
   const anki = createAnki({
     url: `http://127.0.0.1:${ankiAddress.port}`,
     apiKey: null,
@@ -245,6 +250,9 @@ test('lists the library with subtitle languages', async () => {
       ['02', [], 0],
     ],
   );
+  for (const episode of series?.episodes ?? []) {
+    assert.equal(episode.thumbnail, `/api/episodes/${episode.id}/thumbnail`);
+  }
 });
 
 test('describes an episode, prewarming it and the next one', async () => {
@@ -293,6 +301,17 @@ test('episode video is served whole and by range', async () => {
   const beyond = await fetch(url, { headers: { Range: 'bytes=1000-' } });
   assert.equal(beyond.status, 416);
   assert.equal(beyond.headers.get('content-range'), 'bytes */1000');
+});
+
+test('serves a cached episode thumbnail', async () => {
+  const res = await fetch(`${cardBase}/api/episodes/${cardEpisodeId}/thumbnail`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/jpeg');
+  assert.match(res.headers.get('cache-control') ?? '', /max-age=86400/);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  assert.deepEqual([...bytes.subarray(0, 2)], [0xff, 0xd8]);
+
+  assert.equal((await fetch(`${cardBase}/api/episodes/00ff/thumbnail`)).status, 404);
 });
 
 test('progress is saved durably and offered for resume', async () => {
@@ -494,7 +513,11 @@ test('returns 502 when Anki cannot be reached', async () => {
     model: cardStore.config.anki.model,
   });
   const library = createLibrary([cardRoot]);
-  const media = createMediaCache({ dir: join(cardCache, 'down-media'), limitBytes: 1_000_000_000 });
+  const media = createMediaCache({
+    dir: join(cardCache, 'down-media'),
+    thumbsDir: join(cardCache, 'down-thumbs'),
+    limitBytes: 1_000_000_000,
+  });
   const cards = createMiner({ library, media, anki, store: cardStore, workDir: join(cardCache, 'down-cards') });
   const downServer = createServer(
     createHandler({ dictionary, library, progress: cardStore, media, cards, publicDir }),

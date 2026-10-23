@@ -5,14 +5,16 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { captureFrame, encodeAudioClip } from './frames.ts';
+import { captureFrame, captureThumbnail, encodeAudioClip } from './frames.ts';
 import { createFileLru } from './lru.ts';
-import { probeStreams } from './probe.ts';
+import { probeDuration, probeStreams } from './probe.ts';
 import { remuxToMp4 } from './remux.ts';
 
 export interface MediaCacheOptions {
   /** Directory for remuxed files, e.g. <repo>/cache/media. Created if missing. */
   dir: string;
+  /** Directory for episode thumbnails, e.g. <repo>/cache/thumbs. Created if missing. */
+  thumbsDir: string;
   /** LRU size limit in bytes for completed files. */
   limitBytes: number;
   /** Paths to the binaries; default 'ffmpeg' / 'ffprobe'. */
@@ -32,6 +34,13 @@ export interface MediaCache {
   prewarm(key: string, source: string): void;
   /** Whether a completed file exists for key (no remux). */
   isReady(key: string): boolean;
+  /**
+   * Path of a JPEG still for `source` at `<thumbsDir>/<key>.jpg`, extracted on
+   * first request. Concurrent calls for the same key share one run; a cached
+   * file is reused while it is newer than the source. Thumbnails are not part
+   * of the remux LRU.
+   */
+  thumbnail(key: string, source: string): Promise<string>;
   /** Extracts a JPEG frame at `time` from `source` into `output` (scaled to max 1280 px wide, quality ~ -q:v 3). */
   screenshot(source: string, time: number, output: string): Promise<void>;
   /** Extracts [start, end) of the selected audio stream (same selection as remux: first jpn audio) into an MP3 at `output` (libmp3lame, -q:a 4, mono not required). */
@@ -41,16 +50,19 @@ export interface MediaCache {
 const episodeKey = /^[0-9a-f]+$/;
 
 export function createMediaCache(options: MediaCacheOptions): MediaCache {
-  const { dir, limitBytes } = options;
+  const { dir, thumbsDir, limitBytes } = options;
   const ffmpeg = options.ffmpeg ?? 'ffmpeg';
   const ffprobe = options.ffprobe ?? 'ffprobe';
 
-  removeStaleTemporaryFiles(dir);
+  prepareDirectory(dir, '.mp4.tmp');
+  prepareDirectory(thumbsDir, '.jpg.tmp');
   const lru = createFileLru(dir);
   const running = new Map<string, Promise<string>>();
+  const thumbnails = new Map<string, Promise<string>>();
   let trimming: Promise<void> = Promise.resolve();
 
   const fileOf = (key: string) => join(dir, `${key}.mp4`);
+  const thumbFileOf = (key: string) => join(thumbsDir, `${key}.jpg`);
 
   async function build(key: string, source: string): Promise<string> {
     const output = fileOf(key);
@@ -94,6 +106,27 @@ export function createMediaCache(options: MediaCacheOptions): MediaCache {
     return task;
   }
 
+  async function buildThumbnail(key: string, source: string): Promise<string> {
+    const output = thumbFileOf(key);
+    const [cached, origin] = await Promise.all([stat(output).catch(() => null), stat(source)]);
+    if (cached && cached.mtimeMs > origin.mtimeMs) return output;
+    // A third of the way in avoids the opening logo without reaching the end;
+    // sources without a duration fall back to a minute.
+    const duration = await probeDuration(ffprobe, source);
+    const time = duration === null ? 60 : duration / 3;
+    await captureThumbnail({ ffmpeg, source, time, output });
+    return output;
+  }
+
+  async function thumbnail(key: string, source: string): Promise<string> {
+    if (!episodeKey.test(key)) throw new Error(`invalid media key: ${JSON.stringify(key)}`);
+    const pending = thumbnails.get(key);
+    if (pending) return pending;
+    const task = buildThumbnail(key, source).finally(() => thumbnails.delete(key));
+    thumbnails.set(key, task);
+    return task;
+  }
+
   return {
     prepare,
     prewarm(key, source) {
@@ -104,6 +137,7 @@ export function createMediaCache(options: MediaCacheOptions): MediaCache {
     isReady(key) {
       return episodeKey.test(key) && existsSync(fileOf(key));
     },
+    thumbnail,
     async screenshot(source, time, output) {
       await captureFrame({ ffmpeg, source, time, output });
     },
@@ -115,13 +149,13 @@ export function createMediaCache(options: MediaCacheOptions): MediaCache {
 }
 
 /**
- * Leftover `.tmp` files are remuxes that never finished. They are not part of
- * the LRU and are removed before the first request, so the disk does not keep
- * them forever. Synchronous because createMediaCache cannot await.
+ * Creates a cache directory and drops the temporary file left by a crash, so
+ * neither remuxes nor thumbnails keep partial files forever. Synchronous
+ * because createMediaCache cannot await.
  */
-function removeStaleTemporaryFiles(dir: string): void {
+function prepareDirectory(dir: string, temporarySuffix: string): void {
   mkdirSync(dir, { recursive: true });
   for (const name of readdirSync(dir)) {
-    if (name.endsWith('.mp4.tmp')) rmSync(join(dir, name), { force: true });
+    if (name.endsWith(temporarySuffix)) rmSync(join(dir, name), { force: true });
   }
 }

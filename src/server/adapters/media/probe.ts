@@ -52,3 +52,18 @@ function isJapanese(stream: ProbeStream): boolean {
   const language = stream.tags?.language?.toLowerCase();
   return language === 'jpn' || language === 'ja';
 }
+
+/** Container duration in seconds, or null when the source does not report one. */
+export async function probeDuration(ffprobe: string, source: string): Promise<number | null> {
+  const result = await run(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', source]);
+  if (result.code !== 0) {
+    throw new Error(`ffprobe failed for ${source}: ${tail(result.stderr)}`);
+  }
+  try {
+    const parsed = JSON.parse(result.stdout) as { format?: { duration?: unknown } };
+    const duration = Number(parsed.format?.duration);
+    return Number.isFinite(duration) && duration > 0 ? duration : null;
+  } catch {
+    return null;
+  }
+}

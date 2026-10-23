@@ -50,6 +50,8 @@ export interface MediaService {
   prepare(key: string, source: string): Promise<string>;
   /** Starts preparing without waiting. */
   prewarm(key: string, source: string): void;
+  /** Path of a cached JPEG still for the episode, extracted on first request. */
+  thumbnail(key: string, source: string): Promise<string>;
 }
 
 export interface CardService {
@@ -80,6 +82,8 @@ const CONTENT_TYPES: Record<string, string> = {
   '.ssa': 'text/plain; charset=utf-8',
   '.srt': 'text/plain; charset=utf-8',
   '.mp4': 'video/mp4',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
 };
@@ -120,7 +124,7 @@ async function route(services: HttpServices, req: IncomingMessage, res: ServerRe
   }
   const method = req.method === 'HEAD' ? 'GET' : req.method;
 
-  const episodeRoute = /^\/api\/episodes\/([0-9a-f]+)(?:\/(video|progress|subtitles\/([\w-]+)))?$/.exec(path);
+  const episodeRoute = /^\/api\/episodes\/([0-9a-f]+)(?:\/(video|progress|thumbnail|subtitles\/([\w-]+)))?$/.exec(path);
   if (episodeRoute) {
     const [, id = '', action, language] = episodeRoute;
     if (action === 'progress') {
@@ -132,6 +136,15 @@ async function route(services: HttpServices, req: IncomingMessage, res: ServerRe
     if (!located) throw new HttpError(404, 'unknown episode');
     if (action === 'video') {
       return sendPath(req, res, await services.media.prepare(id, located.videoPath));
+    }
+    if (action === 'thumbnail') {
+      let file: string;
+      try {
+        file = await services.media.thumbnail(id, located.videoPath);
+      } catch {
+        throw new HttpError(502, 'cannot extract thumbnail');
+      }
+      return sendPath(req, res, file, 'max-age=86400');
     }
     if (language !== undefined) {
       const file = located.subtitlePaths[language];
@@ -195,6 +208,7 @@ async function describeLibrary(services: HttpServices): Promise<LibraryResponse>
         languages: Object.keys(e.subtitles),
         position: progress.get(e.id)?.position ?? 0,
         duration: progress.get(e.id)?.duration ?? 0,
+        thumbnail: `/api/episodes/${e.id}/thumbnail`,
       })),
     })),
     resume: resume && {
@@ -397,7 +411,12 @@ async function sendFile(req: IncomingMessage, res: ServerResponse, dir: string, 
 }
 
 /** Serves an absolute file path, honouring a single byte range. */
-async function sendPath(req: IncomingMessage, res: ServerResponse, file: string): Promise<void> {
+async function sendPath(
+  req: IncomingMessage,
+  res: ServerResponse,
+  file: string,
+  cacheControl = 'no-cache',
+): Promise<void> {
   let info: Stats;
   try {
     info = await stat(file);
@@ -409,7 +428,7 @@ async function sendPath(req: IncomingMessage, res: ServerResponse, file: string)
   const headers = {
     'Content-Type': CONTENT_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': cacheControl,
     'Last-Modified': info.mtime.toUTCString(),
   };
   const decision = decideRange(req.headers.range, info.size);

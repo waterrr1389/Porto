@@ -18,7 +18,11 @@ const titles = dictionary.dictionaries().map((d) => d.title);
 console.log(titles.length > 0 ? `dictionaries: ${titles.join(', ')}` : 'no dictionaries; run `npm run import-dicts`');
 
 const library = createLibrary(store.config.mediaRoots);
-const media = createMediaCache({ dir: join(paths.cache, 'media'), limitBytes: store.config.cacheLimitGB * 1e9 });
+const media = createMediaCache({
+  dir: join(paths.cache, 'media'),
+  thumbsDir: join(paths.cache, 'thumbs'),
+  limitBytes: store.config.cacheLimitGB * 1e9,
+});
 const anki = createAnki(store.config.anki);
 const cards = createMiner({ library, media, anki, store, workDir: join(paths.cache, 'cards') });
 

@@ -58,6 +58,53 @@ export async function captureFrame(request: ScreenshotRequest): Promise<void> {
   }
 }
 
+export interface ThumbnailRequest {
+  ffmpeg: string;
+  source: string;
+  time: number;
+  output: string;
+}
+
+/**
+ * A representative JPEG frame from near `time`, at most 1280 px wide. The
+ * `thumbnail` filter scores a batch of frames and keeps the one closest to
+ * their average, so a black transition frame is not chosen.
+ */
+export async function captureThumbnail(request: ThumbnailRequest): Promise<void> {
+  const temporary = `${request.output}.tmp`;
+  try {
+    const result = await run(request.ffmpeg, [
+      '-nostdin',
+      '-v',
+      'error',
+      '-y',
+      '-ss',
+      String(request.time),
+      '-i',
+      request.source,
+      '-frames:v',
+      '1',
+      '-an',
+      '-sn',
+      '-dn',
+      '-vf',
+      "thumbnail=60,scale='min(1280,iw)':-2",
+      '-q:v',
+      '4',
+      '-f',
+      'image2',
+      temporary,
+    ]);
+    if (result.code !== 0) {
+      throw new Error(`ffmpeg failed for ${request.source}: ${tail(result.stderr)}`);
+    }
+    await rename(temporary, request.output);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
+}
+
 /**
  * Encodes [start, end) of one audio stream to MP3. `-ss` before the input is
  * accurate here because the clip is re-encoded; ffmpeg decodes from the

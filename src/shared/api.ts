@@ -27,6 +27,12 @@ export interface EpisodeSummary {
   position: number;
   /** Duration in seconds as last reported by the player, 0 when unknown. */
   duration: number;
+  /**
+   * GET — a JPEG still from the episode, at most 1280 px wide. Generated on
+   * first request (may take a few seconds), then cached; 404 for an unknown
+   * episode, 502 when the frame cannot be extracted.
+   */
+  thumbnail: string;
 }
 
 /**
