@@ -3,6 +3,7 @@
 import type { EpisodeSummary, LibraryResponse, SeriesSummary } from '../../shared/api.ts';
 import type { Dispatch } from '../effects.ts';
 import type { State } from '../state.ts';
+import { THEME_LABELS, nextPreference, type Theme } from '../theme.ts';
 
 export interface LibraryElements {
   root: HTMLElement;
@@ -20,8 +21,22 @@ interface Shelf {
   episodes: readonly EpisodeSummary[];
 }
 
-export function createLibraryView(els: LibraryElements, dispatch: Dispatch) {
+export function createLibraryView(els: LibraryElements, dispatch: Dispatch, theme: Theme) {
   let shown: LibraryResponse | null | undefined;
+
+  const themeButton = el('button', 'theme-toggle');
+  themeButton.type = 'button';
+  const refreshThemeLabel = (): void => {
+    const label = THEME_LABELS[theme.preference()];
+    themeButton.textContent = label;
+    themeButton.setAttribute('aria-label', `主题：${label}`);
+  };
+  themeButton.addEventListener('click', () => {
+    theme.setPreference(nextPreference(theme.preference()));
+    refreshThemeLabel();
+  });
+  theme.onChange(refreshThemeLabel);
+  refreshThemeLabel();
 
   els.root.addEventListener('click', (event) => {
     if (!(event.target instanceof Element)) return;
@@ -40,18 +55,25 @@ export function createLibraryView(els: LibraryElements, dispatch: Dispatch) {
       els.root.replaceChildren(el('div', 'lib-empty', '加载中…'));
       return;
     }
-    const { nodes, shelves } = renderLibrary(state.library);
+    const { nodes, shelves } = renderLibrary(state.library, themeButton);
     els.root.replaceChildren(...nodes);
     revealNextEpisodes(shelves, state.library);
   };
 }
 
-function renderLibrary(library: LibraryResponse): { nodes: HTMLElement[]; shelves: Shelf[] } {
+function renderLibrary(library: LibraryResponse, themeButton: HTMLElement): { nodes: HTMLElement[]; shelves: Shelf[] } {
   const nodes: HTMLElement[] = [];
   const shelves: Shelf[] = [];
 
-  const hero = library.resume === null ? null : renderHero(library);
-  nodes.push(hero ?? el('h1', 'lib-heading', '资料库'));
+  if (library.resume === null) {
+    const band = el('header', 'lib-band');
+    band.append(el('h1', 'lib-heading', '资料库'), themeButton);
+    nodes.push(band);
+  } else {
+    const hero = renderHero(library);
+    hero.append(themeButton);
+    nodes.push(hero);
+  }
 
   const content = el('div', 'lib-content');
   for (const series of library.series) {

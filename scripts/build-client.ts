@@ -24,6 +24,7 @@ await build({
   alias: {
     // Yomitan is imported by bare specifier so TypeScript can use site-local declarations.
     'yomitan/structured-content-generator': join(yomitanDir, 'js/display/structured-content-generator.js'),
+    'yomitan/anki-template-renderer-content-manager': join(yomitanDir, 'js/templates/anki-template-renderer-content-manager.js'),
     'yomitan/structured-content.css': join(yomitanDir, 'css/structured-content.css'),
   },
 });

@@ -5,7 +5,9 @@ import { scopeCss } from '../../../core/css.ts';
 import { scanText } from '../../../core/scan.ts';
 import type { DictionaryInfo, LookupResponse, TermEntry, WordAudio } from '../../../shared/api.ts';
 import type { Dispatch } from '../../effects.ts';
+import { furiganaParts, hasKanji } from '../../ruby.ts';
 import { entryAudioKey, type EntryAudio, type LookupPage, type State } from '../../state.ts';
+import { AnkiTemplateRendererContentManager } from 'yomitan/anki-template-renderer-content-manager';
 import { StructuredContentGenerator } from 'yomitan/structured-content-generator';
 import 'yomitan/structured-content.css';
 
@@ -17,13 +19,18 @@ export interface PanelElements {
   results: HTMLElement;
 }
 
-/** Yomitan's renderer asks for media and links that definitions in this panel never contain. */
-const CONTENT_MANAGER = {
-  loadMedia() {},
-  unloadAll() {},
-  prepareLink() {},
-  openMediaInTab() {},
-};
+/**
+ * Images in definitions, such as a dictionary's 注意 icon, come from the server.
+ * Yomitan's renderer only loads media through its own content manager classes,
+ * so the panel uses the one it ships for Anki templates.
+ */
+const CONTENT_MANAGER = new AnkiTemplateRendererContentManager(
+  {
+    getMedia: (_data, [, path], { dictionary }) =>
+      `/api/dictionaries/media?dictionary=${encodeURIComponent(dictionary)}&path=${encodeURIComponent(path)}`,
+  },
+  {},
+);
 
 const SPEAKER_ICON =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/><path d="M18 7a7 7 0 0 1 0 10"/></svg>';
@@ -55,6 +62,8 @@ export function createPanelView(els: PanelElements, dispatch: Dispatch) {
   els.back.addEventListener('click', () => dispatch({ type: 'panelBack' }));
   els.close.addEventListener('click', () => dispatch({ type: 'panelClosed' }));
   els.results.addEventListener('click', (event) => {
+    // Links inside definitions only exist to be looked up; following them would leave the page.
+    if (event.target instanceof Element && event.target.closest('a')) event.preventDefault();
     if (!(event.target instanceof Element)) return;
     if (event.target.closest('button, summary, a')) return;
     const caret = document.caretRangeFromPoint;
@@ -148,10 +157,12 @@ function renderEntry(
   const box = el('div', 'entry');
   const head = el('div', 'entry-head');
   const headword = entry.headwords[0];
+
+  const headwordBlock = el('div', 'headword-block');
   if (headword !== undefined) {
-    head.append(el('span', 'term', headword.term));
-    if (headword.reading !== '' && headword.reading !== headword.term) {
-      head.append(el('span', 'reading', headword.reading));
+    headwordBlock.append(termElement(headword.term, headword.reading));
+    for (const other of entry.headwords.slice(1, 4)) {
+      headwordBlock.append(el('span', 'reading', `· ${other.term}`));
     }
   }
 
@@ -190,14 +201,9 @@ function renderEntry(
 
   const audioControl = el('span', 'audio-control');
   audioControl.append(audioButton, audioMore);
-  head.append(audioControl);
 
-  for (const other of entry.headwords.slice(1, 4)) {
-    head.append(el('span', 'reading', `· ${other.term}`));
-  }
   const badge = el('span', 'dup-badge');
   badge.hidden = true;
-  head.append(badge);
   const mine = el('button', 'mine', '制卡');
   mine.type = 'button';
   mine.addEventListener('click', () => {
@@ -205,44 +211,29 @@ function renderEntry(
   });
   const hint = el('span', 'mine-hint');
   hint.hidden = true;
-  head.append(mine, hint);
+  const actions = el('div', 'headword-actions');
+  actions.append(badge, audioControl, mine, hint);
+  head.append(headwordBlock, actions);
   box.append(head);
 
   const audioMenu = el('div', 'audio-menu');
   audioMenu.hidden = true;
   box.append(audioMenu);
 
-  const chips = el('div', 'chips');
+  const tags = el('div', 'entry-tags');
   if (entry.inflections.length > 0) {
-    chips.append(el('span', 'chip', `« ${entry.inflections.join(' « ')}`));
+    tags.append(el('span', 'chip', `« ${entry.inflections.join(' « ')}`));
   }
-  for (const frequency of entry.frequencies) {
-    chips.append(el('span', 'chip freq', `${frequency.dictionary} ${frequency.value}`));
-  }
-  for (const pitch of entry.pitches) {
-    chips.append(el('span', 'chip', `[${pitch}]`));
-  }
-  if (chips.childElementCount > 0) box.append(chips);
+  for (const frequency of entry.frequencies) tags.append(frequencyTag(frequency));
+  if (tags.childElementCount > 0) box.append(tags);
 
-  entry.definitions.forEach((definition, index) => {
-    const details = el('details', 'dict');
-    details.open = index < 2;
-    details.append(el('summary', null, definition.dictionary));
-    const list = el('ul', 'gloss');
-    list.dataset.dictionary = definition.dictionary;
-    for (const glossary of definition.glossary) {
-      const item = el('li', null);
-      if (glossary.type === 'text') {
-        item.append(document.createTextNode(glossary.text));
-      } else {
-        const content = generator.createStructuredContent(glossary.content, definition.dictionary);
-        if (content !== null) item.append(content);
-      }
-      list.append(item);
-    }
-    details.append(list);
-    box.append(details);
-  });
+  for (const accent of entry.pitchAccents) box.append(pitchRow(accent));
+
+  if (entry.definitions.length > 0) {
+    const definitions = el('div', 'definitions');
+    entry.definitions.forEach((definition, index) => definitions.append(definitionRow(definition, index, generator)));
+    box.append(definitions);
+  }
 
   return {
     box,
@@ -258,6 +249,75 @@ function renderEntry(
       audioMenuKey: '',
     },
   };
+}
+
+/** The headword with furigana over its kanji, or one ruby over the whole term. */
+function termElement(term: string, reading: string): HTMLElement {
+  const node = el('span', 'term');
+  const parts = furiganaParts(term, reading);
+  if (parts !== null) {
+    for (const part of parts) {
+      if (part.ruby !== undefined && part.ruby !== '') node.append(rubyElement(part.text, part.ruby));
+      else node.append(document.createTextNode(part.text));
+    }
+    return node;
+  }
+  if (reading !== '' && reading !== term && hasKanji(term)) {
+    node.append(rubyElement(term, reading));
+    return node;
+  }
+  node.append(document.createTextNode(term));
+  return node;
+}
+
+function rubyElement(text: string, reading: string): HTMLElement {
+  const ruby = document.createElement('ruby');
+  const rt = document.createElement('rt');
+  rt.textContent = reading;
+  ruby.append(document.createTextNode(text), rt);
+  return ruby;
+}
+
+/** A two-part frequency pill: dictionary on green, value on neutral. */
+function frequencyTag(frequency: TermEntry['frequencies'][number]): HTMLElement {
+  const tag = el('span', 'freq-tag');
+  tag.append(el('span', 'freq-dict', frequency.dictionary), el('span', 'freq-value', frequency.value));
+  return tag;
+}
+
+function pitchRow(accent: TermEntry['pitchAccents'][number]): HTMLElement {
+  const row = el('div', 'pitch-row');
+  row.append(el('span', 'tag-purple pitch-dict', accent.dictionary));
+  row.append(el('span', 'pitch-reading', accent.reading));
+  for (const position of accent.positions) row.append(el('span', 'pitch-position', `[${position}]`));
+  return row;
+}
+
+/** One numbered definition: purple dictionary tag, then its rendered senses. */
+function definitionRow(
+  definition: TermEntry['definitions'][number],
+  index: number,
+  generator: StructuredContentGenerator,
+): HTMLElement {
+  const row = el('div', 'definition');
+  row.append(el('span', 'def-number', `${index + 1}.`));
+  const body = el('div', 'def-body');
+  body.append(el('span', 'tag-purple def-dict', definition.dictionary));
+  const list = el('ul', 'gloss');
+  list.dataset.dictionary = definition.dictionary;
+  for (const glossary of definition.glossary) {
+    const item = el('li', null);
+    if (glossary.type === 'text') {
+      item.append(document.createTextNode(glossary.text));
+    } else {
+      const content = generator.createStructuredContent(glossary.content, definition.dictionary);
+      if (content !== null) item.append(content);
+    }
+    list.append(item);
+  }
+  body.append(list);
+  row.append(body);
+  return row;
 }
 
 function audioStateForEntry(page: LookupPage, entryIndex: number): EntryAudio | undefined {

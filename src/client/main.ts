@@ -8,6 +8,7 @@ import { createPlayerView } from './views/player.ts';
 import { createSubtitlesView } from './views/subtitles.ts';
 import { createPanelView } from './views/panel/index.ts';
 import { createVolume } from './volume.ts';
+import { createTheme } from './theme.ts';
 import './style.css';
 
 const byId = <T extends HTMLElement>(id: string): T => {
@@ -25,6 +26,7 @@ const bySelector = <T extends Element>(selector: string): T => {
 const stage = byId('stage');
 const video = byId<HTMLVideoElement>('video');
 const volume = createVolume(video);
+const theme = createTheme(stage);
 // Any tap may be the one that starts playback; the audio graph needs a gesture too.
 for (const type of ['touchend', 'click'] as const) stage.addEventListener(type, () => volume.unlock(), { capture: true });
 
@@ -87,7 +89,7 @@ const views = [
     canFullscreen(stage),
     volume,
   ),
-  createLibraryView({ root: byId('library-screen') }, dispatch),
+  createLibraryView({ root: byId('library-screen') }, dispatch, theme),
   createSubtitlesView({ ja: byId('ja'), zh: byId('zh') }, dispatch, () => video.currentTime),
   createPanelView(
     {
