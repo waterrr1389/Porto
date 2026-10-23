@@ -143,8 +143,10 @@ written to `<id>.mp4.tmp` and renamed when complete; concurrent requests for the
 same episode share one remux. The output uses `+faststart`: on the iPad it starts
 and seeks almost instantly, while fragmented MP4 stuttered badly.
 
-Audio stays FLAC: confirmed on the device that Safari plays FLAC in MP4, so
-there is no transcoding path.
+Audio with one or two channels is copied: confirmed on the device that Safari
+plays FLAC in MP4. Audio with more than two channels is the only thing ever
+re-encoded, to stereo AAC at 256 kbps, because Safari on iPad played a 5.1 Opus
+track as if it were mono. Video is never re-encoded.
 
 Seeking, buffering and range retries are Safari's native progressive playback.
 On the device, dropping WireGuard, seeking ten minutes ahead and reconnecting

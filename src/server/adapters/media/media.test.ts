@@ -154,6 +154,24 @@ test('remuxes into a faststart mp4 with the japanese audio track', async (t) => 
   assert.ok(Math.abs(outputSeconds - sourceSeconds) <= 0.1, `${outputSeconds} vs ${sourceSeconds}`);
 });
 
+test('downmixes audio with more than two channels to stereo aac', async () => {
+  const surround = join(work, 'surround.mkv');
+  ffmpeg([
+    '-nostdin', '-v', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=10:duration=1',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1:sample_rate=48000',
+    '-map', '0:v', '-map', '1:a',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-c:a', 'flac', '-ac', '6',
+    '-t', '1', surround,
+  ]);
+  const cache = createMediaCache({ dir: join(work, 'cache-surround'), limitBytes: 1_000_000_000, thumbsDir: join(work, 'thumbs'), subsDir: join(work, 'subs') });
+  const { streams } = probeStreams(await cache.prepare('c1', surround));
+  const audio = streams.find((stream) => stream.codec_type === 'audio');
+  assert.equal(audio?.codec_name, 'aac');
+  assert.equal(audio?.channels, 2);
+});
+
 test('concurrent prepares for one key share a single remux', async () => {
   const dir = join(work, 'cache-concurrent');
   const log = join(work, 'concurrent.log');
@@ -468,6 +486,7 @@ interface StreamInfo {
   codec_type?: string;
   codec_name?: string;
   codec_tag_string?: string;
+  channels?: number;
   width?: number;
   height?: number;
   tags?: { language?: string };

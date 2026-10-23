@@ -9,10 +9,15 @@ export interface RemuxRequest {
   streams: SelectedStreams;
 }
 
+/** Bit rate for audio that has to be downmixed. */
+const DOWNMIX_BITRATE = '256k';
+
 /**
- * Stream-copies the selected streams into a faststart MP4. Nothing is
- * re-encoded: the video is already HEVC, and Safari plays FLAC in MP4, so
- * AAC sources stay AAC and FLAC sources stay lossless.
+ * Copies the selected streams into a faststart MP4. Video is never
+ * re-encoded, and stereo or mono audio is copied as well: Safari plays FLAC
+ * in MP4, so AAC stays AAC and FLAC stays lossless. Audio with more than two
+ * channels is downmixed to stereo AAC, because Safari on iPad plays 5.1 Opus
+ * as if it were mono.
  */
 export async function remuxToMp4(request: RemuxRequest): Promise<void> {
   const { ffmpeg, source, output, streams } = request;
@@ -36,6 +41,7 @@ export async function remuxToMp4(request: RemuxRequest): Promise<void> {
     '-c',
     'copy',
   ];
+  if (streams.audioChannels > 2) args.push('-c:a', 'aac', '-b:a', DOWNMIX_BITRATE, '-ac', '2');
   if (streams.videoCodec === 'hevc') args.push('-tag:v', 'hvc1');
   args.push('-movflags', '+faststart', '-f', 'mp4', output);
 

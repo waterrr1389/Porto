@@ -5,6 +5,8 @@ import type { EmbeddedSubtitle } from '../../../core/subtitle-options.ts';
 export interface SelectedStreams {
   video: number;
   audio: number;
+  /** Channel count of the selected audio stream; 0 when ffprobe does not report it. */
+  audioChannels: number;
   /** ffprobe's codec name; HEVC must be tagged `hvc1` for Safari to decode it. */
   videoCodec: string;
 }
@@ -13,6 +15,7 @@ interface ProbeStream {
   index: number;
   codec_name?: string;
   codec_type?: string;
+  channels?: number;
   disposition?: { attached_pic?: number };
   tags?: { language?: string; title?: string };
 }
@@ -46,7 +49,7 @@ export async function probeStreams(ffprobe: string, source: string): Promise<Sel
     streams.find((stream) => stream.codec_type === 'audio');
   if (!audio) throw new Error(`no audio stream in ${source}`);
 
-  return { video: video.index, audio: audio.index, videoCodec: video.codec_name ?? '' };
+  return { video: video.index, audio: audio.index, audioChannels: audio.channels ?? 0, videoCodec: video.codec_name ?? '' };
 }
 
 function isJapanese(stream: ProbeStream): boolean {
