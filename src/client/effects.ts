@@ -1,6 +1,6 @@
 // Carries out Effects: network, video element commands, fullscreen and
 // timers. Results come back only as dispatched Actions.
-import { parseSubtitles } from '../core/subtitles.ts';
+import { parseSubtitles, type Cue, type SubtitleFormat } from '../core/subtitles.ts';
 import type {
   ApiError,
   CardRequest,
@@ -11,6 +11,8 @@ import type {
   LibraryResponse,
   LookupResponse,
   ProgressRequest,
+  SubtitleChoiceRequest,
+  SubtitleSlot,
 } from '../shared/api.ts';
 import type { Action, Effect, Timer } from './state.ts';
 
@@ -23,7 +25,17 @@ export interface EffectTargets {
 }
 
 /** Only the Default style of Chinese subtitles is dialogue; other styles are signs and credits. */
-const ASS_STYLES = { zh: ['Default'] } as const;
+const ASS_DIALOGUE_STYLES = ['Default'] as const;
+
+/**
+ * Embedded Chinese tracks often use non-Default style names, so the style
+ * filter is only kept when it leaves at least one cue.
+ */
+function parseSubtitleText(slot: SubtitleSlot, format: SubtitleFormat, text: string): Cue[] {
+  if (slot !== 'zh') return parseSubtitles(format, text);
+  const dialogue = parseSubtitles(format, text, { styles: ASS_DIALOGUE_STYLES });
+  return dialogue.length > 0 ? dialogue : parseSubtitles(format, text);
+}
 
 export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Dispatch): (effect: Effect) => void {
   const timers = new Map<Timer, ReturnType<typeof setTimeout>>();
@@ -36,19 +48,49 @@ export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Di
         return;
 
       case 'fetchSubtitles':
-        fetch(effect.subtitles.url)
+        fetch(effect.option.url)
           .then((res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.text();
           })
           .then((text) => {
-            const styles = effect.track === 'zh' ? { styles: ASS_STYLES.zh } : undefined;
-            dispatch({ type: 'subtitlesLoaded', track: effect.track, cues: parseSubtitles(effect.subtitles.format, text, styles) });
+            dispatch({
+              type: 'subtitlesLoaded',
+              slot: effect.slot,
+              optionId: effect.option.id,
+              requestId: effect.requestId,
+              cues: parseSubtitleText(effect.slot, effect.option.format, text),
+            });
           })
           .catch((error: unknown) => {
-            dispatch({ type: 'subtitlesFailed', track: effect.track, message: String(error) });
+            dispatch({
+              type: 'subtitlesFailed',
+              slot: effect.slot,
+              optionId: effect.option.id,
+              requestId: effect.requestId,
+              message: String(error),
+            });
           });
         return;
+
+      case 'saveSubtitleChoice': {
+        const body: SubtitleChoiceRequest = {
+          episodeId: effect.episodeId,
+          slot: effect.slot,
+          option: effect.option,
+        };
+        // Remembering the choice is best effort; playback does not wait for it.
+        void fetch(`/api/series/${encodeURIComponent(effect.seriesId)}/subtitles`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+          .then((response) => {
+            if (!response.ok) dispatch({ type: 'subtitleChoiceFailed' });
+          })
+          .catch(() => dispatch({ type: 'subtitleChoiceFailed' }));
+        return;
+      }
 
       case 'fetchDictionaries':
         getJson<DictionaryInfo[]>('/api/dictionaries')

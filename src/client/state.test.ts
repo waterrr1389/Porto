@@ -7,6 +7,7 @@ import {
   type EpisodeResponse,
   type LibraryResponse,
   type LookupResponse,
+  type SubtitleOption,
   type TermEntry,
 } from '../shared/api.ts';
 import {
@@ -31,21 +32,25 @@ function run(state: State, ...actions: Action[]): { state: State; effects: Effec
   return { state, effects };
 }
 
-const episode = {
-  video: '/v.mp4',
-  subtitles: { ja: { url: '/v/ja', format: 'ass' as const }, zh: { url: '/v/zh', format: 'srt' as const } },
-};
+const episode = { video: '/v.mp4' };
 const opened = run(initialState, { type: 'episodeOpened', episode }).state;
 const playing = run(opened, { type: 'videoPlayed' }).state;
 
-test('opening an episode loads the video and both subtitle tracks', () => {
+/** Simulates a subtitle fetch response from the state's current request. */
+function loadCues(state: State, slot: 'ja' | 'zh', cues: Cue[]): State {
+  return reduce(state, {
+    type: 'subtitlesLoaded',
+    slot,
+    optionId: `test-${slot}`,
+    requestId: state.subtitleRequest[slot],
+    cues,
+  }).state;
+}
+
+test('opening an episode loads its video', () => {
   const { state, effects } = run(initialState, { type: 'episodeOpened', episode });
   assert.equal(state.episode, episode);
-  assert.deepEqual(effects, [
-    { type: 'loadVideo', url: '/v.mp4' },
-    { type: 'fetchSubtitles', track: 'ja', subtitles: { url: '/v/ja', format: 'ass' } },
-    { type: 'fetchSubtitles', track: 'zh', subtitles: { url: '/v/zh', format: 'srt' } },
-  ]);
+  assert.deepEqual(effects, [{ type: 'loadVideo', url: '/v.mp4' }]);
 });
 
 test('on-screen cue changes update state only when the ids differ', () => {
@@ -85,14 +90,10 @@ test('seeking is an effect and shows the controls', () => {
 });
 
 test('stepping between lines seeks to the line start', () => {
-  const withCues = reduce(playing, {
-    type: 'subtitlesLoaded',
-    track: 'ja',
-    cues: [
-      { id: 0, start: 10, end: 12, text: 'a' },
-      { id: 1, start: 20, end: 22, text: 'b' },
-    ],
-  }).state;
+  const withCues = loadCues(playing, 'ja', [
+    { id: 0, start: 10, end: 12, text: 'a' },
+    { id: 1, start: 20, end: 22, text: 'b' },
+  ]);
   const next = reduce(withCues, { type: 'cueStepRequested', direction: 1, time: 11 });
   assert.deepEqual(next.effects[0], { type: 'seek', time: 20 });
   const past = reduce(withCues, { type: 'cueStepRequested', direction: 1, time: 25 });
@@ -140,8 +141,14 @@ test('a second error during a reload does not stack reloads', () => {
 });
 
 test('notices clear after a timer', () => {
-  const failed = run(opened, { type: 'subtitlesFailed', track: 'ja', message: 'HTTP 404' });
-  assert.match(failed.state.notice ?? '', /ja subtitles failed/);
+  const failed = reduce(opened, {
+    type: 'subtitlesFailed',
+    slot: 'ja',
+    optionId: 'test-ja',
+    requestId: opened.subtitleRequest.ja,
+    message: 'HTTP 404',
+  });
+  assert.match(failed.state.notice ?? '', /字幕加载失败: HTTP 404/);
   assert.equal(reduce(failed.state, { type: 'timerFired', timer: 'clearNotice' }).state.notice, null);
 });
 
@@ -153,8 +160,7 @@ const jaCues: Cue[] = [
   { id: 2, start: 0, end: 10, text: 'あい。' },
 ];
 const withCues = run(
-  playing,
-  { type: 'subtitlesLoaded', track: 'ja', cues: jaCues },
+  loadCues(playing, 'ja', jaCues),
   { type: 'cuesOnScreen', track: 'ja', ids: [0] },
 ).state;
 const responses = {
@@ -194,12 +200,8 @@ test('tapping a character starts a lookup from that offset and pauses playback',
 });
 
 test('tapping while already paused does not pause again', () => {
-  const paused = run(
-    initialState,
-    { type: 'episodeOpened', episode },
-    { type: 'subtitlesLoaded', track: 'ja', cues: jaCues },
-    { type: 'cuesOnScreen', track: 'ja', ids: [0] },
-  ).state;
+  const base = run(initialState, { type: 'episodeOpened', episode }).state;
+  const paused = run(loadCues(base, 'ja', jaCues), { type: 'cuesOnScreen', track: 'ja', ids: [0] }).state;
   const step = reduce(paused, { type: 'characterTapped', cueId: 0, offset: 0, time: 0 });
   assert.deepEqual(step.effects, [{ type: 'lookup', seq: 1, text: '日本語です' }]);
   assert.equal(step.state.lookup.pausedByLookup, false);
@@ -357,12 +359,48 @@ test('manual playback while the panel is open clears pausedByLookup but keeps th
 
 // ---------------------------------------------------------------- library
 
+const jaSidecar: SubtitleOption = {
+  id: 'ja-side',
+  slot: 'ja',
+  label: '.ja.ass',
+  source: 'sidecar',
+  url: '/api/episodes/e1/subtitles/ja-side',
+  format: 'ass',
+};
+const jaEmbedded: SubtitleOption = {
+  id: 'ja-emb',
+  slot: 'ja',
+  label: 'Japanese (Netflix)',
+  source: 'embedded',
+  url: '/api/episodes/e1/subtitles/ja-emb',
+  format: 'ass',
+};
+const zhSidecar: SubtitleOption = {
+  id: 'zh-side',
+  slot: 'zh',
+  label: '.sc.ass',
+  source: 'sidecar',
+  url: '/api/episodes/e1/subtitles/zh-side',
+  format: 'ass',
+};
+const zhEmbedded: SubtitleOption = {
+  id: 'zh-emb',
+  slot: 'zh',
+  label: 'Chinese (Simplified)',
+  source: 'embedded',
+  url: '/api/episodes/e1/subtitles/zh-emb',
+  format: 'ass',
+};
+
 const firstEpisode: EpisodeResponse = {
   id: 'e1',
   title: '第1话',
+  seriesId: 's1',
   seriesTitle: 'Show',
   video: '/api/episodes/e1/video',
-  subtitles: { ja: { url: '/api/episodes/e1/subtitles/ja', format: 'ass' as const } },
+  subtitleOptions: [jaSidecar, zhSidecar, jaEmbedded, zhEmbedded],
+  subtitles: { ja: jaSidecar.id, zh: zhSidecar.id },
+  subtitleFallback: [],
   position: 42,
   nextEpisodeId: 'e2',
 };
@@ -415,24 +453,24 @@ test('choosing an episode requests its detail and stays in the library meanwhile
   assert.equal(step.state.screen, 'library');
 });
 
-test('episodeLoaded builds the player state and reuses the load effects', () => {
+test('episodeLoaded builds the player state and fetches the selected subtitles', () => {
   const chosen = run(initialState, { type: 'episodeChosen', episodeId: 'e1' }).state;
   const { state, effects } = reduce(chosen, { type: 'episodeLoaded', episode: firstEpisode });
 
   assert.equal(state.screen, 'player');
   assert.equal(state.currentEpisode, firstEpisode);
-  assert.deepEqual(state.episode, {
-    video: '/api/episodes/e1/video',
-    subtitles: { ja: { url: '/api/episodes/e1/subtitles/ja', format: 'ass' as const } },
-  });
+  assert.deepEqual(state.episode, { video: '/api/episodes/e1/video' });
   assert.equal(state.pendingStartPosition, 42);
   assert.equal(state.notice, '准备中…');
   assert.equal(state.choosingEpisodeId, null);
+  assert.deepEqual(state.subtitleSelection, { ja: 'ja-side', zh: 'zh-side' });
+  assert.deepEqual(state.subtitleLoading, { ja: 'ja-side', zh: 'zh-side' });
   assert.deepEqual(effects, [
     { type: 'cancelTimer', timer: 'clearNotice' },
     { type: 'cancelTimer', timer: 'saveProgress' },
     { type: 'loadVideo', url: '/api/episodes/e1/video' },
-    { type: 'fetchSubtitles', track: 'ja', subtitles: { url: '/api/episodes/e1/subtitles/ja', format: 'ass' } },
+    { type: 'fetchSubtitles', slot: 'ja', option: jaSidecar, requestId: 1 },
+    { type: 'fetchSubtitles', slot: 'zh', option: zhSidecar, requestId: 2 },
   ]);
 });
 
@@ -499,8 +537,7 @@ test('pausing saves progress only when an episode is loaded from the library', (
 
 test('going back saves progress, pauses and reloads the library', () => {
   const playingEpisode = run(
-    choose(firstEpisode),
-    { type: 'subtitlesLoaded', track: 'ja', cues: jaCues },
+    loadCues(choose(firstEpisode), 'ja', jaCues),
     { type: 'cuesOnScreen', track: 'ja', ids: [0] },
     { type: 'videoPlayed' },
     { type: 'characterTapped', cueId: 0, offset: 0, time: 0 },
@@ -586,8 +623,7 @@ const definitions = [{ dictionary: '大辞泉', html: '<li>Japanese language</li
 const miningReady = (() => {
   const loaded = choose(firstEpisode);
   return run(
-    loaded,
-    { type: 'subtitlesLoaded', track: 'ja', cues: jaCues },
+    loadCues(loaded, 'ja', jaCues),
     { type: 'cuesOnScreen', track: 'ja', ids: [0] },
     { type: 'characterTapped', cueId: 0, offset: 1, time: 12.5 },
     { type: 'lookupSucceeded', seq: 1, text: '本語です', response: mineResponse },
@@ -796,4 +832,153 @@ test('creating a card bumps that term count so the badge stays consistent', () =
 
   assert.deepEqual(mined.lookup.history[0]?.duplicates, { 日本語: 3, 国語: 0 });
   assert.deepEqual(mined.lookup.history[0]?.mined[0], { status: 'done', noteId: 5, duplicates: 2 });
+});
+
+// ------------------------------------------------------------- subtitles
+
+test('the initial slot selections are fetched and recorded', () => {
+  const chosen = run(initialState, { type: 'episodeChosen', episodeId: 'e1' }).state;
+  const { state, effects } = reduce(chosen, { type: 'episodeLoaded', episode: firstEpisode });
+
+  const fetches = effects.filter((effect) => effect.type === 'fetchSubtitles');
+  assert.deepEqual(
+    fetches.map((effect) => (effect.type === 'fetchSubtitles' ? effect.slot : '')),
+    ['ja', 'zh'],
+  );
+  assert.deepEqual(state.subtitleSelection, { ja: 'ja-side', zh: 'zh-side' });
+
+  const jaLoaded = reduce(state, {
+    type: 'subtitlesLoaded',
+    slot: 'ja',
+    optionId: 'ja-side',
+    requestId: state.subtitleRequest.ja,
+    cues: jaCues,
+  }).state;
+  assert.equal(jaLoaded.cues.ja.length, jaCues.length);
+  assert.equal(jaLoaded.subtitleLoading.ja, null);
+});
+
+test('a slot with no selected option is not fetched', () => {
+  const chosen = run(initialState, { type: 'episodeChosen', episodeId: 'e1' }).state;
+  const step = reduce(chosen, {
+    type: 'episodeLoaded',
+    episode: { ...firstEpisode, subtitles: { ja: 'ja-side', zh: null } },
+  });
+  assert.deepEqual(step.state.subtitleSelection, { ja: 'ja-side', zh: null });
+  assert.equal(step.effects.filter((effect) => effect.type === 'fetchSubtitles').length, 1);
+});
+
+test('a fallback subtitle selection is announced', () => {
+  const chosen = run(initialState, { type: 'episodeChosen', episodeId: 'e1' }).state;
+
+  const withOption = reduce(chosen, {
+    type: 'episodeLoaded',
+    episode: { ...firstEpisode, subtitleFallback: ['zh'] },
+  });
+  assert.match(withOption.state.notice ?? '', /未找到上次选择的字幕，已改用 \.sc\.ass/);
+  assert.ok(withOption.effects.some((effect) => effect.type === 'startTimer' && effect.timer === 'clearNotice'));
+
+  const turnedOff = reduce(chosen, {
+    type: 'episodeLoaded',
+    episode: {
+      ...firstEpisode,
+      subtitles: { ja: 'ja-side', zh: null },
+      subtitleFallback: ['zh'],
+    },
+  });
+  assert.match(turnedOff.state.notice ?? '', /已改用 关闭/);
+});
+
+test('choosing a subtitle option fetches it and remembers the choice', () => {
+  const withZhCues = loadCues(choose(firstEpisode), 'zh', [{ id: 0, start: 0, end: 2, text: '中文' }]);
+  const step = reduce(withZhCues, { type: 'subtitleChosen', slot: 'zh', option: 'zh-emb' });
+
+  assert.deepEqual(step.state.cues.zh, []);
+  assert.deepEqual(step.state.onScreen.zh, []);
+  assert.equal(step.state.subtitleSelection.zh, 'zh-emb');
+  assert.equal(step.state.subtitleLoading.zh, 'zh-emb');
+  assert.deepEqual(step.effects, [
+    { type: 'fetchSubtitles', slot: 'zh', option: zhEmbedded, requestId: 3 },
+    { type: 'saveSubtitleChoice', seriesId: 's1', episodeId: 'e1', slot: 'zh', option: 'zh-emb' },
+  ]);
+});
+
+test('a response for a superseded option is ignored', () => {
+  const first = reduce(choose(firstEpisode), {
+    type: 'subtitleChosen',
+    slot: 'zh',
+    option: 'zh-emb',
+  }).state;
+  const second = reduce(first, { type: 'subtitleChosen', slot: 'zh', option: 'zh-side' }).state;
+
+  const stale = reduce(second, {
+    type: 'subtitlesLoaded',
+    slot: 'zh',
+    optionId: 'zh-emb',
+    requestId: 3,
+    cues: [{ id: 0, start: 0, end: 1, text: 'stale' }],
+  });
+  assert.equal(stale.state, second);
+
+  const fresh = reduce(second, {
+    type: 'subtitlesLoaded',
+    slot: 'zh',
+    optionId: 'zh-side',
+    requestId: 4,
+    cues: [{ id: 0, start: 0, end: 1, text: 'fresh' }],
+  }).state;
+  assert.deepEqual(fresh.cues.zh.map((cue) => cue.text), ['fresh']);
+  assert.equal(fresh.subtitleLoading.zh, null);
+});
+
+test('choosing off clears the slot and saves the choice', () => {
+  const withZhCues = loadCues(choose(firstEpisode), 'zh', [{ id: 0, start: 0, end: 2, text: '中文' }]);
+  const off = reduce(withZhCues, { type: 'subtitleChosen', slot: 'zh', option: null });
+
+  assert.deepEqual(off.state.cues.zh, []);
+  assert.deepEqual(off.state.onScreen.zh, []);
+  assert.equal(off.state.subtitleSelection.zh, null);
+  assert.equal(off.state.subtitleLoading.zh, null);
+  assert.deepEqual(off.effects, [
+    { type: 'saveSubtitleChoice', seriesId: 's1', episodeId: 'e1', slot: 'zh', option: null },
+  ]);
+});
+
+test('changing the Japanese subtitle keeps lookups on the new cues', () => {
+  const chosen = reduce(choose(firstEpisode), { type: 'subtitleChosen', slot: 'ja', option: 'ja-emb' });
+  const loaded = reduce(chosen.state, {
+    type: 'subtitlesLoaded',
+    slot: 'ja',
+    optionId: 'ja-emb',
+    requestId: chosen.state.subtitleRequest.ja,
+    cues: [{ id: 0, start: 0, end: 9, text: '新しい字幕' }],
+  }).state;
+
+  const tap = reduce(loaded, { type: 'characterTapped', cueId: 0, offset: 0, time: 1 });
+  assert.deepEqual(tap.effects, [{ type: 'lookup', seq: 1, text: '新しい字幕' }]);
+});
+
+test('a subtitle choice that cannot be saved shows a notice', () => {
+  const failed = reduce(choose(firstEpisode), { type: 'subtitleChoiceFailed' });
+  assert.equal(failed.state.notice, '字幕选择未能保存');
+});
+
+test('a subtitle response from the previous episode is ignored', () => {
+  const first = choose(firstEpisode);
+  const withChoice = reduce(first, { type: 'subtitleChosen', slot: 'ja', option: 'ja-emb' }).state;
+  const next = run(
+    reduce(withChoice, { type: 'nextEpisodeRequested' }).state,
+    { type: 'episodeLoaded', episode: secondEpisode },
+  ).state;
+  assert.equal(next.currentEpisode?.id, 'e2');
+  assert.ok(next.subtitleRequest.ja > withChoice.subtitleRequest.ja);
+
+  const stale = reduce(next, {
+    type: 'subtitlesLoaded',
+    slot: 'ja',
+    optionId: 'ja-emb',
+    requestId: withChoice.subtitleRequest.ja,
+    cues: [{ id: 0, start: 0, end: 1, text: '旧的' }],
+  });
+  assert.equal(stale.state, next);
 });

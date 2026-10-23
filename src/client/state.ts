@@ -17,17 +17,17 @@ import {
   type EpisodeResponse,
   type LibraryResponse,
   type LookupResponse,
-  type SubtitleTrack,
+  type SubtitleOption,
+  type SubtitleSlot,
 } from '../shared/api.ts';
 
-export type Track = 'ja' | 'zh';
+export type Track = SubtitleSlot;
 
 /** The library list replaces the player until an episode is chosen. */
 export type Screen = 'library' | 'player';
 
 export interface Episode {
   video: string;
-  subtitles: Partial<Record<Track, SubtitleTrack>>;
 }
 
 /** Where the currently pending lookup started: a tap on this cue, or in the panel. */
@@ -94,6 +94,16 @@ export interface State {
   /** Saved position to seek to after the next metadata load; null once applied. */
   pendingStartPosition: number | null;
   episode: Episode | null;
+  /** Every subtitle candidate of the current episode, sidecar and embedded. */
+  subtitleOptions: SubtitleOption[];
+  /** Selected option per slot; null means off. */
+  subtitleSelection: Record<SubtitleSlot, string | null>;
+  /** Identity of the newest fetch per slot; responses with older ids are stale. */
+  subtitleRequest: Record<SubtitleSlot, number>;
+  /** Option id currently downloading per slot; null when nothing loads. */
+  subtitleLoading: Record<SubtitleSlot, string | null>;
+  /** Next identity handed to a subtitle fetch. */
+  nextSubtitleRequest: number;
   /** Available dictionaries; kept across episodes. */
   dictionaries: DictionaryInfo[];
   cues: Record<Track, Cue[]>;
@@ -124,8 +134,10 @@ export type Action =
   | { type: 'episodeOpened'; episode: Episode }
   | { type: 'dictionariesLoaded'; dictionaries: DictionaryInfo[] }
   | { type: 'dictionariesFailed'; message: string }
-  | { type: 'subtitlesLoaded'; track: Track; cues: Cue[] }
-  | { type: 'subtitlesFailed'; track: Track; message: string }
+  | { type: 'subtitlesLoaded'; slot: SubtitleSlot; optionId: string; requestId: number; cues: Cue[] }
+  | { type: 'subtitlesFailed'; slot: SubtitleSlot; optionId: string; requestId: number; message: string }
+  | { type: 'subtitleChosen'; slot: SubtitleSlot; option: string | null }
+  | { type: 'subtitleChoiceFailed' }
   | { type: 'cuesOnScreen'; track: Track; ids: number[] }
   | { type: 'characterTapped'; cueId: number; offset: number; time: number }
   | { type: 'definitionTapped'; text: string }
@@ -159,7 +171,8 @@ export type Timer = 'hideControls' | 'stall' | 'clearNotice' | 'saveProgress';
 
 export type Effect =
   | { type: 'loadVideo'; url: string }
-  | { type: 'fetchSubtitles'; track: Track; subtitles: SubtitleTrack }
+  | { type: 'fetchSubtitles'; slot: SubtitleSlot; option: SubtitleOption; requestId: number }
+  | { type: 'saveSubtitleChoice'; seriesId: string; episodeId: string; slot: SubtitleSlot; option: string | null }
   | { type: 'fetchDictionaries' }
   | { type: 'fetchLibrary' }
   | { type: 'fetchEpisode'; id: string }
@@ -195,6 +208,7 @@ const HAVE_FUTURE_DATA = 3;
 const NOTICE_MS = 4000;
 const PREPARING_NOTICE = '准备中…';
 const ENDED_NOTICE = '本集结束，可播放下一集';
+const SUBTITLE_SLOTS: readonly SubtitleSlot[] = ['ja', 'zh'];
 
 export const initialState: State = {
   screen: 'library',
@@ -203,6 +217,11 @@ export const initialState: State = {
   choosingEpisodeId: null,
   pendingStartPosition: null,
   episode: null,
+  subtitleOptions: [],
+  subtitleSelection: { ja: null, zh: null },
+  subtitleRequest: { ja: 0, zh: 0 },
+  subtitleLoading: { ja: null, zh: null },
+  nextSubtitleRequest: 1,
   dictionaries: [],
   cues: { ja: [], zh: [] },
   onScreen: { ja: [], zh: [] },
@@ -247,24 +266,29 @@ export function reduce(state: State, action: Action): Step {
 
     case 'episodeLoaded': {
       if (action.episode.id !== state.choosingEpisodeId) return only(state);
-      const episode: Episode = { video: action.episode.video, subtitles: action.episode.subtitles };
-      return {
-        state: {
-          ...initialState,
-          screen: 'player',
-          library: state.library,
-          dictionaries: state.dictionaries,
-          currentEpisode: action.episode,
-          episode,
-          pendingStartPosition: action.episode.position,
-          notice: PREPARING_NOTICE,
-        },
-        effects: [
-          { type: 'cancelTimer', timer: 'clearNotice' },
-          { type: 'cancelTimer', timer: 'saveProgress' },
-          ...openEpisodeEffects(episode),
-        ],
+      const episode: Episode = { video: action.episode.video };
+      const fallback = subtitleFallbackNotice(action.episode);
+      const base: State = {
+        ...initialState,
+        screen: 'player',
+        library: state.library,
+        dictionaries: state.dictionaries,
+        currentEpisode: action.episode,
+        episode,
+        subtitleOptions: action.episode.subtitleOptions,
+        nextSubtitleRequest: state.nextSubtitleRequest,
+        pendingStartPosition: action.episode.position,
+        notice: fallback ?? PREPARING_NOTICE,
       };
+      const initial = startInitialSubtitles(base, action.episode);
+      const effects: Effect[] = [
+        { type: 'cancelTimer', timer: 'clearNotice' },
+        { type: 'cancelTimer', timer: 'saveProgress' },
+        { type: 'loadVideo', url: episode.video },
+        ...initial.effects,
+      ];
+      if (fallback !== null) effects.push({ type: 'startTimer', timer: 'clearNotice', ms: NOTICE_MS });
+      return { state: initial.state, effects };
     }
 
     case 'episodeFailed':
@@ -333,10 +357,25 @@ export function reduce(state: State, action: Action): Step {
       return notify(state, `dictionaries failed: ${action.message}`);
 
     case 'subtitlesLoaded':
-      return only({ ...state, cues: { ...state.cues, [action.track]: action.cues } });
+      if (action.requestId !== state.subtitleRequest[action.slot]) return only(state);
+      return only({
+        ...state,
+        cues: { ...state.cues, [action.slot]: action.cues },
+        subtitleLoading: { ...state.subtitleLoading, [action.slot]: null },
+      });
 
     case 'subtitlesFailed':
-      return notify(state, `${action.track} subtitles failed: ${action.message}`);
+      if (action.requestId !== state.subtitleRequest[action.slot]) return only(state);
+      return notify(
+        { ...state, subtitleLoading: { ...state.subtitleLoading, [action.slot]: null } },
+        `字幕加载失败: ${action.message}`,
+      );
+
+    case 'subtitleChosen':
+      return chooseSubtitle(state, action.slot, action.option);
+
+    case 'subtitleChoiceFailed':
+      return notify(state, '字幕选择未能保存');
 
     case 'cuesOnScreen':
       if (sameIds(state.onScreen[action.track], action.ids)) return only(state);
@@ -549,14 +588,105 @@ function sameIds(a: readonly number[], b: readonly number[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
-/** Loading an episode replaces the source and both subtitle tracks. */
+/** Loading an episode replaces the source; subtitle fetches are started separately. */
 function openEpisodeEffects(episode: Episode): Effect[] {
-  const effects: Effect[] = [{ type: 'loadVideo', url: episode.video }];
-  for (const track of ['ja', 'zh'] as const) {
-    const subtitles = episode.subtitles[track];
-    if (subtitles) effects.push({ type: 'fetchSubtitles', track, subtitles });
+  return [{ type: 'loadVideo', url: episode.video }];
+}
+
+/**
+ * Starts the fetches for the episode's selected options. The selection is the
+ * server's saved choice when it exists, otherwise the default it chose.
+ */
+function startInitialSubtitles(
+  state: State,
+  episode: EpisodeResponse,
+): { state: State; effects: Effect[] } {
+  const selection: Record<SubtitleSlot, string | null> = {
+    ja: episode.subtitles.ja,
+    zh: episode.subtitles.zh,
+  };
+  const request: Record<SubtitleSlot, number> = { ja: 0, zh: 0 };
+  const loading: Record<SubtitleSlot, string | null> = { ja: null, zh: null };
+  const effects: Effect[] = [];
+  let nextRequest = state.nextSubtitleRequest;
+
+  for (const slot of SUBTITLE_SLOTS) {
+    const optionId = selection[slot];
+    if (optionId === null) continue;
+    const option = episode.subtitleOptions.find(
+      (candidate) => candidate.id === optionId && candidate.slot === slot,
+    );
+    if (option === undefined) continue;
+    request[slot] = nextRequest;
+    loading[slot] = option.id;
+    effects.push({ type: 'fetchSubtitles', slot, option, requestId: nextRequest });
+    nextRequest += 1;
   }
-  return effects;
+
+  return {
+    state: {
+      ...state,
+      subtitleSelection: selection,
+      subtitleRequest: request,
+      subtitleLoading: loading,
+      nextSubtitleRequest: nextRequest,
+    },
+    effects,
+  };
+}
+
+/** Tells the viewer why the saved choice could not be restored. */
+function subtitleFallbackNotice(episode: EpisodeResponse): string | null {
+  if (episode.subtitleFallback.length === 0) return null;
+  const labels = episode.subtitleFallback.map((slot) => {
+    const selected = episode.subtitles[slot];
+    if (selected === null) return '关闭';
+    return episode.subtitleOptions.find((option) => option.id === selected)?.label ?? '关闭';
+  });
+  return `未找到上次选择的字幕，已改用 ${labels.join('、')}`;
+}
+
+/**
+ * Switches one slot: old cues disappear at once, a new fetch gets a fresh
+ * identity so earlier responses are ignored, and the choice is stored.
+ */
+function chooseSubtitle(state: State, slot: SubtitleSlot, optionId: string | null): Step {
+  const episode = state.currentEpisode;
+  if (episode === null) return only(state);
+
+  const requestId = state.nextSubtitleRequest;
+  const save: Effect = {
+    type: 'saveSubtitleChoice',
+    seriesId: episode.seriesId,
+    episodeId: episode.id,
+    slot,
+    option: optionId,
+  };
+  const cleared: State = {
+    ...state,
+    cues: { ...state.cues, [slot]: [] },
+    onScreen: { ...state.onScreen, [slot]: [] },
+    subtitleSelection: { ...state.subtitleSelection, [slot]: optionId },
+    subtitleRequest: { ...state.subtitleRequest, [slot]: requestId },
+    nextSubtitleRequest: requestId + 1,
+  };
+
+  if (optionId === null) {
+    return {
+      state: { ...cleared, subtitleLoading: { ...state.subtitleLoading, [slot]: null } },
+      effects: [save],
+    };
+  }
+
+  const option = state.subtitleOptions.find(
+    (candidate) => candidate.id === optionId && candidate.slot === slot,
+  );
+  if (option === undefined) return only(state);
+
+  return {
+    state: { ...cleared, subtitleLoading: { ...state.subtitleLoading, [slot]: optionId } },
+    effects: [{ type: 'fetchSubtitles', slot, option, requestId }, save],
+  };
 }
 
 function closedLookup(lookup: LookupState): LookupState {

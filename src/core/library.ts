@@ -2,6 +2,15 @@
 // sidecar subtitles. Ids depend only on the root's name and relative paths, so
 // they survive restarts and rescans; renaming a file changes its id.
 
+export interface SidecarSubtitle {
+  /** Path of the subtitle relative to the media root. */
+  path: string;
+  /** File name after the video stem, e.g. '.sc.ass'. */
+  suffix: string;
+  /** Language from the suffix, normalised by `subtitleLanguage`, e.g. 'ja', 'zh', 'zh-Hant'. */
+  language: string;
+}
+
 export interface LibraryEpisode {
   id: string;
   /** Episode number parsed from the file name, if any. */
@@ -10,8 +19,8 @@ export interface LibraryEpisode {
   title: string;
   /** Path of the video relative to the media root. */
   video: string;
-  /** Subtitle paths relative to the media root, by language (see `subtitleLanguage`). */
-  subtitles: Record<string, string>;
+  /** Every sidecar subtitle of this episode, sorted by path. */
+  subtitles: SidecarSubtitle[];
 }
 
 export interface LibrarySeries {
@@ -52,15 +61,16 @@ export function buildLibrary(rootName: string, files: readonly string[]): Librar
     }
     const videoStem = stem(baseName(file));
     const number = episodeNumber(videoStem);
-    const subtitles: Record<string, string> = {};
+    const subtitles: SidecarSubtitle[] = [];
     for (const subtitle of subtitlesByDirectory.get(dir) ?? []) {
       const name = baseName(subtitle);
       if (!name.startsWith(videoStem)) continue;
-      const tag = name.slice(videoStem.length).replace(SUBTITLE, '');
+      const suffix = name.slice(videoStem.length);
+      const tag = suffix.replace(SUBTITLE, '');
       if (tag !== '' && !tag.startsWith('.')) continue;
-      const language = subtitleLanguage(tag.slice(1));
-      subtitles[language] ??= subtitle;
+      subtitles.push({ path: subtitle, suffix, language: subtitleLanguage(tag.slice(1)) });
     }
+    subtitles.sort((a, b) => naturalCompare(a.path, b.path));
     series.episodes.push({
       id: stableId(`${rootName}\0${file}`),
       number,
@@ -75,16 +85,6 @@ export function buildLibrary(rootName: string, files: readonly string[]): Librar
     s.episodes.sort((a, b) => (a.number ?? Infinity) - (b.number ?? Infinity) || naturalCompare(a.video, b.video));
   }
   return series.sort((a, b) => naturalCompare(a.title, b.title) || naturalCompare(a.directory, b.directory));
-}
-
-/** The subtitle shown for each player track: Japanese, and Simplified Chinese before Traditional. */
-export function playerTracks(subtitles: Readonly<Record<string, string>>): { ja?: string; zh?: string } {
-  const tracks: { ja?: string; zh?: string } = {};
-  const ja = subtitles.ja;
-  const zh = subtitles.zh ?? subtitles['zh-Hant'];
-  if (ja !== undefined) tracks.ja = ja;
-  if (zh !== undefined) tracks.zh = zh;
-  return tracks;
 }
 
 /** An episode counts as finished once fewer than this many seconds remain. */

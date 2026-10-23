@@ -1,4 +1,5 @@
 import { rename, rm } from 'node:fs/promises';
+import type { SubtitleFormat } from '../../../core/subtitle-options.ts';
 import { run, tail } from './exec.ts';
 
 export interface ScreenshotRequest {
@@ -93,6 +94,47 @@ export async function captureThumbnail(request: ThumbnailRequest): Promise<void>
       '4',
       '-f',
       'image2',
+      temporary,
+    ]);
+    if (result.code !== 0) {
+      throw new Error(`ffmpeg failed for ${request.source}: ${tail(result.stderr)}`);
+    }
+    await rename(temporary, request.output);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+export interface SubtitleExtractionRequest {
+  ffmpeg: string;
+  source: string;
+  /** Absolute stream index in the source. */
+  index: number;
+  format: SubtitleFormat;
+  output: string;
+}
+
+/**
+ * Extracts one embedded text subtitle stream. ASS and SSA are copied as they
+ * are; SubRip goes through the srt muxer so the output is plain SRT. The
+ * result is renamed into place only after a successful run.
+ */
+export async function extractSubtitle(request: SubtitleExtractionRequest): Promise<void> {
+  const temporary = `${request.output}.tmp`;
+  try {
+    const result = await run(request.ffmpeg, [
+      '-nostdin',
+      '-v',
+      'error',
+      '-y',
+      '-i',
+      request.source,
+      '-map',
+      `0:${request.index}`,
+      ...(request.format === 'ass' ? ['-c:s', 'copy'] : ['-c:s', 'srt']),
+      '-f',
+      request.format,
       temporary,
     ]);
     if (result.code !== 0) {

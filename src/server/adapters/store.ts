@@ -1,9 +1,14 @@
-// Durable user state under state/: config, playback positions and the
-// history of mined cards. These
+// Durable user state under state/: config, playback positions, subtitle
+// choices and the history of mined cards. These
 // cannot be rebuilt, so writes go to a temporary file that is renamed over the
 // old one, and the program never deletes them.
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type {
+  SavedSubtitleChoices,
+  SubtitleChoice,
+  SubtitleSlot,
+} from '../../core/subtitle-options.ts';
 
 export interface Config {
   /** Directories scanned for episodes; each root's name is part of episode ids. */
@@ -48,6 +53,11 @@ export interface Store {
   saveProgress(episodeId: string, position: number, duration: number): void;
   /** Appends to state/cards.jsonl, one JSON object per line with the time it was mined. */
   recordCard(card: MinedCard): void;
+  /** Saved subtitle choices of a series, by slot. */
+  subtitleChoices(seriesId: string): SavedSubtitleChoices;
+  saveSubtitleChoice(seriesId: string, slot: SubtitleSlot, choice: SubtitleChoice): void;
+  /** Forgets the choice of one slot. */
+  clearSubtitleChoice(seriesId: string, slot: SubtitleSlot): void;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -64,6 +74,7 @@ export function openStore(dir: string): Store {
   mkdirSync(dir, { recursive: true });
   const configPath = join(dir, 'config.json');
   const progressPath = join(dir, 'progress.json');
+  const subtitlesPath = join(dir, 'subtitles.json');
 
   const storedConfig = readJson<Partial<Config>>(configPath);
   if (storedConfig === null) writeJsonAtomic(configPath, DEFAULT_CONFIG);
@@ -74,6 +85,13 @@ export function openStore(dir: string): Store {
   };
 
   const positions = new Map(Object.entries(readJson<Record<string, Progress>>(progressPath) ?? {}));
+  const subtitleChoices = new Map(
+    Object.entries(readJson<Record<string, SavedSubtitleChoices>>(subtitlesPath) ?? {}),
+  );
+
+  function writeSubtitleChoices(): void {
+    writeJsonAtomic(subtitlesPath, Object.fromEntries(subtitleChoices));
+  }
 
   return {
     config,
@@ -85,6 +103,18 @@ export function openStore(dir: string): Store {
     },
     recordCard(card) {
       appendFileSync(join(dir, 'cards.jsonl'), `${JSON.stringify({ ...card, minedAt: new Date().toISOString() })}\n`);
+    },
+    subtitleChoices: (seriesId) => ({ ...(subtitleChoices.get(seriesId) ?? {}) }),
+    saveSubtitleChoice(seriesId, slot, choice) {
+      subtitleChoices.set(seriesId, { ...(subtitleChoices.get(seriesId) ?? {}), [slot]: choice });
+      writeSubtitleChoices();
+    },
+    clearSubtitleChoice(seriesId, slot) {
+      const saved = { ...(subtitleChoices.get(seriesId) ?? {}) };
+      delete saved[slot];
+      if (Object.keys(saved).length === 0) subtitleChoices.delete(seriesId);
+      else subtitleChoices.set(seriesId, saved);
+      writeSubtitleChoices();
     },
   };
 }

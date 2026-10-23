@@ -5,9 +5,10 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { captureFrame, captureThumbnail, encodeAudioClip } from './frames.ts';
+import type { EmbeddedSubtitle, SubtitleFormat } from '../../../core/subtitle-options.ts';
+import { captureFrame, captureThumbnail, encodeAudioClip, extractSubtitle } from './frames.ts';
 import { createFileLru } from './lru.ts';
-import { probeDuration, probeStreams } from './probe.ts';
+import { probeDuration, probeEmbeddedSubtitles, probeStreams } from './probe.ts';
 import { remuxToMp4 } from './remux.ts';
 
 export interface MediaCacheOptions {
@@ -15,6 +16,8 @@ export interface MediaCacheOptions {
   dir: string;
   /** Directory for episode thumbnails, e.g. <repo>/cache/thumbs. Created if missing. */
   thumbsDir: string;
+  /** Directory for extracted embedded subtitles, e.g. <repo>/cache/subs. Created if missing. */
+  subsDir: string;
   /** LRU size limit in bytes for completed files. */
   limitBytes: number;
   /** Paths to the binaries; default 'ffmpeg' / 'ffprobe'. */
@@ -43,6 +46,20 @@ export interface MediaCache {
   thumbnail(key: string, source: string): Promise<string>;
   /** Extracts a JPEG frame at `time` from `source` into `output` (scaled to max 1280 px wide, quality ~ -q:v 3). */
   screenshot(source: string, time: number, output: string): Promise<void>;
+  /**
+   * Embedded text subtitle streams of `source` (ass, ssa and subrip only), in
+   * stream order. Memoised by path and mtime.
+   */
+  embeddedSubtitles(source: string): Promise<EmbeddedSubtitle[]>;
+  /**
+   * Path of the extracted subtitle for embedded stream `index`, at
+   * `<subsDir>/<key>-<index>.<format>`. Extraction runs on first request;
+   * concurrent calls for one stream share it and a cached file is reused while
+   * it is newer than the source.
+   */
+  subtitle(key: string, source: string, index: number, format: SubtitleFormat): Promise<string>;
+  /** Starts subtitle() without waiting; errors are logged, not thrown. */
+  prewarmSubtitle(key: string, source: string, index: number, format: SubtitleFormat): void;
   /** Extracts [start, end) of the selected audio stream (same selection as remux: first jpn audio) into an MP3 at `output` (libmp3lame, -q:a 4, mono not required). */
   audioClip(source: string, start: number, end: number, output: string): Promise<void>;
 }
@@ -50,19 +67,25 @@ export interface MediaCache {
 const episodeKey = /^[0-9a-f]+$/;
 
 export function createMediaCache(options: MediaCacheOptions): MediaCache {
-  const { dir, thumbsDir, limitBytes } = options;
+  const { dir, thumbsDir, subsDir, limitBytes } = options;
   const ffmpeg = options.ffmpeg ?? 'ffmpeg';
   const ffprobe = options.ffprobe ?? 'ffprobe';
 
   prepareDirectory(dir, '.mp4.tmp');
   prepareDirectory(thumbsDir, '.jpg.tmp');
+  prepareDirectory(subsDir, '.tmp');
   const lru = createFileLru(dir);
   const running = new Map<string, Promise<string>>();
   const thumbnails = new Map<string, Promise<string>>();
+  const embedded = new Map<string, { mtimeMs: number; streams: EmbeddedSubtitle[] }>();
+  const embeddedJobs = new Map<string, Promise<EmbeddedSubtitle[]>>();
+  const subtitleJobs = new Map<string, Promise<string>>();
   let trimming: Promise<void> = Promise.resolve();
 
   const fileOf = (key: string) => join(dir, `${key}.mp4`);
   const thumbFileOf = (key: string) => join(thumbsDir, `${key}.jpg`);
+  const subtitleFileOf = (key: string, index: number, format: SubtitleFormat) =>
+    join(subsDir, `${key}-${index}.${format}`);
 
   async function build(key: string, source: string): Promise<string> {
     const output = fileOf(key);
@@ -127,6 +150,46 @@ export function createMediaCache(options: MediaCacheOptions): MediaCache {
     return task;
   }
 
+  async function embeddedSubtitles(source: string): Promise<EmbeddedSubtitle[]> {
+    const info = await stat(source).catch(() => null);
+    const cached = embedded.get(source);
+    if (info !== null && cached !== undefined && cached.mtimeMs === info.mtimeMs) return cached.streams;
+
+    const pending = embeddedJobs.get(source);
+    if (pending) return pending;
+    const task = probeEmbeddedSubtitles(ffprobe, source)
+      .then((streams) => {
+        if (info !== null) embedded.set(source, { mtimeMs: info.mtimeMs, streams });
+        return streams;
+      })
+      .finally(() => embeddedJobs.delete(source));
+    embeddedJobs.set(source, task);
+    return task;
+  }
+
+  async function buildSubtitle(
+    key: string,
+    source: string,
+    index: number,
+    format: SubtitleFormat,
+  ): Promise<string> {
+    const output = subtitleFileOf(key, index, format);
+    const [cached, origin] = await Promise.all([stat(output).catch(() => null), stat(source)]);
+    if (cached && cached.mtimeMs > origin.mtimeMs) return output;
+    await extractSubtitle({ ffmpeg, source, index, format, output });
+    return output;
+  }
+
+  async function subtitle(key: string, source: string, index: number, format: SubtitleFormat): Promise<string> {
+    if (!episodeKey.test(key)) throw new Error(`invalid media key: ${JSON.stringify(key)}`);
+    const job = `${key}-${index}`;
+    const pending = subtitleJobs.get(job);
+    if (pending) return pending;
+    const task = buildSubtitle(key, source, index, format).finally(() => subtitleJobs.delete(job));
+    subtitleJobs.set(job, task);
+    return task;
+  }
+
   return {
     prepare,
     prewarm(key, source) {
@@ -138,6 +201,16 @@ export function createMediaCache(options: MediaCacheOptions): MediaCache {
       return episodeKey.test(key) && existsSync(fileOf(key));
     },
     thumbnail,
+    embeddedSubtitles,
+    subtitle,
+    prewarmSubtitle(key, source, index, format) {
+      void subtitle(key, source, index, format).catch((error: unknown) => {
+        console.error(
+          `media: prewarm of ${key} subtitle ${index} failed:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
+    },
     async screenshot(source, time, output) {
       await captureFrame({ ffmpeg, source, time, output });
     },
@@ -150,8 +223,8 @@ export function createMediaCache(options: MediaCacheOptions): MediaCache {
 
 /**
  * Creates a cache directory and drops the temporary file left by a crash, so
- * neither remuxes nor thumbnails keep partial files forever. Synchronous
- * because createMediaCache cannot await.
+ * remuxes, thumbnails and extracted subtitles do not keep partial files
+ * forever. Synchronous because createMediaCache cannot await.
  */
 function prepareDirectory(dir: string, temporarySuffix: string): void {
   mkdirSync(dir, { recursive: true });

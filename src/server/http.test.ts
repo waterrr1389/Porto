@@ -91,10 +91,14 @@ before(async () => {
     prepare: async (_key: string, source: string) => source,
     prewarm: (key: string) => void prewarmed.push(key),
     thumbnail: async (_key: string, source: string) => source,
+    subtitle: async () => '',
+    prewarmSubtitle: () => {},
   };
   const library = createLibrary([root]);
   const cards = { mine: async () => ({ noteId: 0, duplicates: 0 }), duplicates: async () => ({}) };
-  server = createServer(createHandler({ dictionary, library, progress: store, media, cards, publicDir }));
+  server = createServer(
+    createHandler({ dictionary, library, progress: store, media, subtitles: store, cards, publicDir }),
+  );
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   assert.ok(address && typeof address === 'object');
@@ -102,7 +106,19 @@ before(async () => {
 
   // A real source file so the miner can capture a screenshot and audio clip;
   // it lives in its own media root to keep the library expectations above.
+  // Two embedded subtitle streams let the HTTP tests exercise extraction.
   mkdirSync(cardRoot, { recursive: true });
+  const cardAss = join(dir, 'card-fixture.ass');
+  writeFileSync(
+    cardAss,
+    '[Script Info]\nScriptType: v4.00+\nPlayResX: 160\nPlayResY: 90\n\n' +
+      '[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n' +
+      'Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1\n\n' +
+      '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n' +
+      'Dialogue: 0,0:00:00.00,0:00:01.50,Default,,0,0,0,,embedded ass\n',
+  );
+  const cardSrt = join(dir, 'card-fixture.srt');
+  writeFileSync(cardSrt, '1\n00:00:00,000 --> 00:00:01,500\nembedded srt\n\n');
   execFileSync(
     'ffmpeg',
     [
@@ -118,10 +134,18 @@ before(async () => {
       'lavfi',
       '-i',
       'sine=frequency=440:duration=2:sample_rate=48000',
+      '-i',
+      cardAss,
+      '-i',
+      cardSrt,
       '-map',
       '0:v',
       '-map',
       '1:a',
+      '-map',
+      '2:s',
+      '-map',
+      '3:s',
       '-c:v',
       'libx264',
       '-preset',
@@ -130,6 +154,18 @@ before(async () => {
       'yuv420p',
       '-c:a',
       'aac',
+      '-c:s:0',
+      'ass',
+      '-c:s:1',
+      'srt',
+      '-metadata:s:s:0',
+      'language=chi',
+      '-metadata:s:s:0',
+      'title=Chinese (Simplified)',
+      '-metadata:s:s:1',
+      'language=jpn',
+      '-metadata:s:s:1',
+      'title=Japanese [SDH]',
       '-t',
       '2',
       join(cardRoot, '[Group] Card Show - 01 [1080p].mkv'),
@@ -169,11 +205,14 @@ before(async () => {
   assert.ok(ankiAddress && typeof ankiAddress === 'object');
 
   cardStore = openStore(cardStateDir);
-  cardLibrary = createLibrary([cardRoot]);
   const cardMedia = createMediaCache({
     dir: join(cardCache, 'media'),
     thumbsDir: join(cardCache, 'thumbs'),
+    subsDir: join(cardCache, 'subs'),
     limitBytes: 1_000_000_000,
+  });
+  cardLibrary = createLibrary([cardRoot], {
+    embeddedSubtitles: (source) => cardMedia.embeddedSubtitles(source),
   });
   const anki = createAnki({
     url: `http://127.0.0.1:${ankiAddress.port}`,
@@ -183,7 +222,15 @@ before(async () => {
   });
   const miner = createMiner({ library: cardLibrary, media: cardMedia, anki, store: cardStore, workDir: cardWorkDir });
   cardServer = createServer(
-    createHandler({ dictionary, library: cardLibrary, progress: cardStore, media: cardMedia, cards: miner, publicDir }),
+    createHandler({
+      dictionary,
+      library: cardLibrary,
+      progress: cardStore,
+      media: cardMedia,
+      subtitles: cardStore,
+      cards: miner,
+      publicDir,
+    }),
   );
   await new Promise<void>((done) => cardServer.listen(0, '127.0.0.1', done));
   const cardAddress = cardServer.address();
@@ -264,19 +311,38 @@ test('describes an episode, prewarming it and the next one', async () => {
   assert.deepEqual(episode, {
     id: first.id,
     title: '01',
+    seriesId: library.series[0]?.id,
     seriesTitle: 'Show',
     video: `/api/episodes/${first.id}/video`,
-    subtitles: {
-      ja: { url: `/api/episodes/${first.id}/subtitles/ja`, format: 'ass' },
-      zh: { url: `/api/episodes/${first.id}/subtitles/zh-Hant`, format: 'ass' },
-    },
+    subtitleOptions: [
+      {
+        id: 'f0',
+        slot: 'ja',
+        label: '.ja.ass',
+        format: 'ass',
+        source: 'sidecar',
+        url: `/api/episodes/${first.id}/subtitles/f0`,
+      },
+      {
+        id: 'f1',
+        slot: 'zh',
+        label: '.tc.ass',
+        format: 'ass',
+        source: 'sidecar',
+        url: `/api/episodes/${first.id}/subtitles/f1`,
+      },
+    ],
+    subtitles: { ja: 'f0', zh: 'f1' },
+    subtitleFallback: [],
     position: 0,
     nextEpisodeId: second.id,
   });
   await new Promise((done) => setTimeout(done, 20));
   assert.deepEqual(prewarmed.sort(), [first.id, second.id].sort());
 
-  const subtitles = await fetch(`${base}${episode.subtitles.zh?.url}`);
+  const zh = episode.subtitleOptions.find((option) => option.slot === 'zh');
+  assert.ok(zh);
+  const subtitles = await fetch(`${base}${zh.url}`);
   assert.equal(await subtitles.text(), 'tc');
   assert.equal((await fetch(`${base}/api/episodes/${first.id}/subtitles/en`)).status, 404);
 });
@@ -312,6 +378,85 @@ test('serves a cached episode thumbnail', async () => {
   assert.deepEqual([...bytes.subarray(0, 2)], [0xff, 0xd8]);
 
   assert.equal((await fetch(`${cardBase}/api/episodes/00ff/thumbnail`)).status, 404);
+});
+
+test('offers embedded subtitle streams and serves them', async () => {
+  const library = (await (await fetch(`${cardBase}/api/library`)).json()) as LibraryResponse;
+  const [series] = library.series;
+  assert.deepEqual(series?.episodes[0]?.languages, ['ja', 'zh']);
+
+  const episode = (await (await fetch(`${cardBase}/api/episodes/${cardEpisodeId}`)).json()) as EpisodeResponse;
+  assert.deepEqual(
+    episode.subtitleOptions.map((option) => [option.slot, option.label, option.source, option.format]),
+    [
+      ['zh', 'Chinese (Simplified)', 'embedded', 'ass'],
+      ['ja', 'Japanese [SDH]', 'embedded', 'srt'],
+    ],
+  );
+  assert.equal(episode.subtitles.ja, episode.subtitleOptions.find((option) => option.slot === 'ja')?.id);
+  assert.equal(episode.subtitles.zh, episode.subtitleOptions.find((option) => option.slot === 'zh')?.id);
+  assert.deepEqual(episode.subtitleFallback, []);
+
+  const ass = episode.subtitleOptions.find((option) => option.format === 'ass');
+  const srt = episode.subtitleOptions.find((option) => option.format === 'srt');
+  assert.ok(ass && srt);
+  assert.match(await (await fetch(`${cardBase}${ass.url}`)).text(), /\[Script Info\]/);
+  assert.match(await (await fetch(`${cardBase}${srt.url}`)).text(), /-->/);
+});
+
+test('remembers subtitle choices per series and reports fallback', async () => {
+  const library = await getJson<LibraryResponse>('/api/library');
+  const series = library.series[0];
+  assert.ok(series);
+  const [first, second] = series.episodes;
+  const put = (body: unknown) =>
+    fetch(`${base}/api/series/${series.id}/subtitles`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  assert.equal((await put({ episodeId: first?.id, slot: 'zh', option: 'f1' })).status, 204);
+  const chosen = await getJson<EpisodeResponse>(`/api/episodes/${first?.id}`);
+  assert.equal(chosen.subtitles.zh, 'f1');
+  assert.deepEqual(chosen.subtitleFallback, []);
+
+  const saved = JSON.parse(readFileSync(join(stateDir, 'subtitles.json'), 'utf8')) as Record<string, unknown>;
+  assert.deepEqual(saved[series.id], { zh: { source: 'sidecar', suffix: '.tc.ass' } });
+
+  // Episode 02 has no subtitle at all, so the saved key cannot match.
+  const other = await getJson<EpisodeResponse>(`/api/episodes/${second?.id}`);
+  assert.deepEqual(other.subtitles, { ja: null, zh: null });
+  assert.deepEqual(other.subtitleFallback, ['zh']);
+
+  assert.equal((await put({ episodeId: first?.id, slot: 'zh', option: null })).status, 204);
+  assert.equal((await getJson<EpisodeResponse>(`/api/episodes/${first?.id}`)).subtitles.zh, null);
+
+  assert.equal((await put({ episodeId: first?.id, slot: 'zh', option: 'default' })).status, 204);
+  assert.equal((await getJson<EpisodeResponse>(`/api/episodes/${first?.id}`)).subtitles.zh, 'f1');
+});
+
+test('validates subtitle choices', async () => {
+  const library = await getJson<LibraryResponse>('/api/library');
+  const series = library.series[0];
+  assert.ok(series);
+  const [first] = series.episodes;
+  const put = (seriesId: string, body: unknown) =>
+    fetch(`${base}/api/series/${seriesId}/subtitles`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  assert.equal((await put(series.id, { episodeId: first?.id, slot: 'ja', option: 'nope' })).status, 400);
+  assert.equal((await put(series.id, { episodeId: first?.id, slot: 'zh', option: 'f0' })).status, 400);
+  assert.equal((await put(series.id, { episodeId: first?.id, slot: 'en', option: 'f0' })).status, 400);
+  assert.equal((await put(series.id, { episodeId: '00ff', slot: 'ja', option: 'f0' })).status, 404);
+  assert.equal((await put(series.id, { episodeId: cardEpisodeId, slot: 'ja', option: 'f0' })).status, 404);
+  assert.equal(
+    (await fetch(`${base}/api/series/${series.id}/subtitles`, { method: 'PUT', body: 'nope' })).status,
+    400,
+  );
 });
 
 test('progress is saved durably and offered for resume', async () => {
@@ -516,11 +661,12 @@ test('returns 502 when Anki cannot be reached', async () => {
   const media = createMediaCache({
     dir: join(cardCache, 'down-media'),
     thumbsDir: join(cardCache, 'down-thumbs'),
+    subsDir: join(cardCache, 'down-subs'),
     limitBytes: 1_000_000_000,
   });
   const cards = createMiner({ library, media, anki, store: cardStore, workDir: join(cardCache, 'down-cards') });
   const downServer = createServer(
-    createHandler({ dictionary, library, progress: cardStore, media, cards, publicDir }),
+    createHandler({ dictionary, library, progress: cardStore, media, subtitles: cardStore, cards, publicDir }),
   );
   await new Promise<void>((done) => downServer.listen(0, '127.0.0.1', done));
   const downAddress = downServer.address();

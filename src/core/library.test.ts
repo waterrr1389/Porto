@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLibrary, cleanTitle, episodeNumber, playerTracks, resumeEpisode, stableId, subtitleLanguage } from './library.ts';
+import { buildLibrary, cleanTitle, episodeNumber, resumeEpisode, stableId, subtitleLanguage } from './library.ts';
 
 const bocchi = '[DMG&VCB-Studio] BOCCHI THE ROCK! [Ma10p_1080p]';
 const ep = (n: string) => `${bocchi}/[DMG&VCB-Studio] BOCCHI THE ROCK! [${n}][Ma10p_1080p][x265_flac]`;
@@ -20,18 +20,41 @@ test('groups videos by directory and pairs sidecar subtitles by language', () =>
   assert.equal(series?.title, 'BOCCHI THE ROCK!');
   assert.equal(series?.directory, bocchi);
   assert.deepEqual(
-    series?.episodes.map((e) => [e.title, e.number, Object.keys(e.subtitles).sort()]),
+    series?.episodes.map((e) => [e.title, e.number, [...new Set(e.subtitles.map((s) => s.language))].sort()]),
     [
       ['05', 5, ['zh']],
       ['06', 6, ['ja', 'zh', 'zh-Hant']],
     ],
   );
-  assert.equal(series?.episodes[1]?.subtitles.ja, `${ep('06')}.ja.ass`);
+  assert.equal(
+    series?.episodes[1]?.subtitles.find((s) => s.language === 'ja')?.path,
+    `${ep('06')}.ja.ass`,
+  );
 });
 
 test('a subtitle must extend the video stem with a dot', () => {
   const [series] = buildLibrary('PT', ['a/Show - 01.mkv', 'a/Show - 01.ass', 'a/Show - 011.ja.ass', 'a/Show - 01.ja.srt']);
-  assert.deepEqual(series?.episodes[0]?.subtitles, { und: 'a/Show - 01.ass', ja: 'a/Show - 01.ja.srt' });
+  assert.deepEqual(series?.episodes[0]?.subtitles, [
+    { path: 'a/Show - 01.ass', suffix: '.ass', language: 'und' },
+    { path: 'a/Show - 01.ja.srt', suffix: '.ja.srt', language: 'ja' },
+  ]);
+});
+
+test('keeps every sidecar subtitle, not only the first per language', () => {
+  const [series] = buildLibrary('PT', [
+    'a/Show - 01.mkv',
+    'a/Show - 01.sc.ass',
+    'a/Show - 01.sc.srt',
+    'a/Show - 01.tc.ass',
+  ]);
+  assert.deepEqual(
+    series?.episodes[0]?.subtitles.map((s) => [s.suffix, s.language]),
+    [
+      ['.sc.ass', 'zh'],
+      ['.sc.srt', 'zh'],
+      ['.tc.ass', 'zh-Hant'],
+    ],
+  );
 });
 
 test('files in the root form one series each', () => {
@@ -93,12 +116,6 @@ test('titles lose release tags', () => {
   assert.equal(cleanTitle('[SweetSub&VCB-Studio] Oniichan ha Oshimai! [Ma10p_1080p]'), 'Oniichan ha Oshimai!');
   assert.equal(cleanTitle('[VCB-Studio] Karakai Jouzu no Takagi-san'), 'Karakai Jouzu no Takagi-san');
   assert.equal(cleanTitle('[only tags]'), '[only tags]');
-});
-
-test('player tracks prefer simplified chinese', () => {
-  assert.deepEqual(playerTracks({ ja: 'a', 'zh-Hant': 'b', zh: 'c', en: 'd' }), { ja: 'a', zh: 'c' });
-  assert.deepEqual(playerTracks({ 'zh-Hant': 'b' }), { zh: 'b' });
-  assert.deepEqual(playerTracks({ en: 'd' }), {});
 });
 
 test('resume offers the latest unfinished episode, or the one after a finished one', () => {

@@ -42,11 +42,20 @@ export interface EpisodeSummary {
 export interface EpisodeResponse {
   id: string;
   title: string;
+  seriesId: string;
   seriesTitle: string;
   /** URL of the playable MP4 (GET with byte ranges). */
   video: string;
-  /** The Japanese and Chinese subtitle files, when present. */
-  subtitles: { ja?: SubtitleTrack; zh?: SubtitleTrack };
+  /** Every Japanese and Chinese subtitle candidate, sidecar files before embedded streams. */
+  subtitleOptions: SubtitleOption[];
+  /**
+   * Option id shown in each slot, null for off: the series' saved choice when
+   * it matches an option of this episode, otherwise the default (sidecar before
+   * embedded; Simplified before Traditional Chinese).
+   */
+  subtitles: Record<SubtitleSlot, string | null>;
+  /** Slots whose saved choice had no match in this episode, so the default was used. */
+  subtitleFallback: SubtitleSlot[];
   /** Saved position in seconds. */
   position: number;
   nextEpisodeId: string | null;
@@ -56,6 +65,30 @@ export interface EpisodeResponse {
 export interface SubtitleTrack {
   url: string;
   format: 'ass' | 'srt';
+}
+
+export type SubtitleSlot = 'ja' | 'zh';
+
+/** One subtitle the player can show; `url` serves the file (embedded streams are extracted on first request, which can take a while). */
+export interface SubtitleOption extends SubtitleTrack {
+  /** Unique within the episode. */
+  id: string;
+  slot: SubtitleSlot;
+  /** What the picker shows, e.g. the stream title "Chinese (Simplified)" or the sidecar suffix ".sc.ass". */
+  label: string;
+  source: 'sidecar' | 'embedded';
+}
+
+/**
+ * PUT /api/series/<id>/subtitles — remembers the choice for one slot for every
+ * episode of the series; answered with 204. `option` is an option id of
+ * `episodeId` (which must belong to the series), null for off, or 'default' to
+ * forget the choice. Stored on the server, so all devices share it.
+ */
+export interface SubtitleChoiceRequest {
+  episodeId: string;
+  slot: SubtitleSlot;
+  option: string | null | 'default';
 }
 
 /** PUT /api/episodes/<id>/progress — answered with 204. */

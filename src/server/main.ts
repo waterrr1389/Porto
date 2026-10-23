@@ -17,14 +17,25 @@ const dictionary = await openDictionary(paths.dictionaryDatabase);
 const titles = dictionary.dictionaries().map((d) => d.title);
 console.log(titles.length > 0 ? `dictionaries: ${titles.join(', ')}` : 'no dictionaries; run `npm run import-dicts`');
 
-const library = createLibrary(store.config.mediaRoots);
 const media = createMediaCache({
   dir: join(paths.cache, 'media'),
   thumbsDir: join(paths.cache, 'thumbs'),
+  subsDir: join(paths.cache, 'subs'),
   limitBytes: store.config.cacheLimitGB * 1e9,
+});
+const library = createLibrary(store.config.mediaRoots, {
+  embeddedSubtitles: (source) => media.embeddedSubtitles(source),
 });
 const anki = createAnki(store.config.anki);
 const cards = createMiner({ library, media, anki, store, workDir: join(paths.cache, 'cards') });
 
-const handler = createHandler({ dictionary, library, progress: store, media, cards, publicDir: paths.public });
+const handler = createHandler({
+  dictionary,
+  library,
+  progress: store,
+  media,
+  subtitles: store,
+  cards,
+  publicDir: paths.public,
+});
 createServer(handler).listen(port, '0.0.0.0', () => console.log(`listening on http://0.0.0.0:${port}`));

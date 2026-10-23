@@ -41,6 +41,7 @@ the whole contract; nothing imports a module's other files.
 | `subtitles` | Parse ASS/SRT into `Cue[]`; cues active at a time; merge pieces that share a time span. |
 | `scan` | From a tap position in a cue, the text to look up; from a match length, the characters to highlight. |
 | `library` | From a directory listing, which files are episodes of which series and which subtitle files belong to each, by language. |
+| `subtitle-options` | Choose a subtitle per language slot from sidecar files and embedded streams; stable keys remember a series-wide choice. |
 | `css` | Scope a dictionary's bundled stylesheet to that dictionary's definitions. |
 | `range` | From an HTTP Range header and a file size, whether to answer 200, 206 with a byte range, or 416. |
 | `card` | From the looked-up term, the current cue, the rendered definition HTML and a field template: the Anki note fields and the screenshot time / audio clip window. Never renders HTML itself. |
@@ -58,10 +59,10 @@ depend on each other only through this file.
 | `http` | Maps routes to adapter and core calls; validation and status codes. No domain logic. |
 | `mining.ts` | Creating a card: captures media, checks duplicates and adds the note through the adapters, using `core/card`. |
 | `adapters/library` | Scans the media roots, keeps the episode index (via `core/library`). |
-| `adapters/media` | ffmpeg: whole-episode remux into `cache/` on first request, screenshots, audio clips; LRU cache. |
+| `adapters/media` | ffmpeg: whole-episode remux into `cache/` on first request, screenshots, audio clips, embedded subtitle extraction; LRU cache. |
 | `adapters/dictionary` | Yomitan importer and translator over a SQLite store. |
 | `adapters/anki` | AnkiConnect calls: store media (by file path, same machine), add notes, find existing notes. |
-| `adapters/store` | Durable user state under `state/`: config, playback positions, mined-card history. |
+| `adapters/store` | Durable user state under `state/`: config, playback positions, subtitle choices, mined-card history. |
 
 ### `src/client/`
 
@@ -129,8 +130,9 @@ not on server start.
 Safari cannot open MKV, so each episode is remuxed once into an MP4 under
 `cache/`, streams copied, not re-encoded:
 `-map 0:v:0 -map 0:a:<first jpn track, else first> -dn -sn -map_chapters -1
--c copy -tag:v hvc1`. Subtitles always come from the sidecar files, never from
-the MP4; fonts, chapters and extra audio tracks are dropped. The iPad decodes
+-c copy -tag:v hvc1`. Subtitles are not copied into the MP4: they come from
+sidecar files, or from text streams extracted from the source into `cache/subs/`;
+fonts, chapters and extra audio tracks are dropped. The iPad decodes
 10-bit HEVC in hardware.
 
 Copying is disk-bound: a 1 GB episode took 1.3 s with a warm page cache; a cold

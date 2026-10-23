@@ -4,9 +4,18 @@ import { createReadStream, type Stats } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
-import { playerTracks, resumeEpisode, type LibraryEpisode, type LibrarySeries } from '../core/library.ts';
+import { resumeEpisode, type LibraryEpisode, type LibrarySeries } from '../core/library.ts';
 import { decideRange } from '../core/range.ts';
-import { subtitleFormat } from '../core/subtitles.ts';
+import {
+  buildSubtitleOptions,
+  embeddedSubtitleLanguage,
+  selectSubtitles,
+  type EmbeddedSubtitle,
+  type SavedSubtitleChoices,
+  type SubtitleFormat,
+  type SubtitleKey,
+  type SubtitleSlot,
+} from '../core/subtitle-options.ts';
 import {
   MAX_DUPLICATE_TERMS,
   MAX_LOOKUP_LENGTH,
@@ -19,7 +28,7 @@ import {
   type LibraryResponse,
   type LookupResponse,
   type ProgressRequest,
-  type SubtitleTrack,
+  type SubtitleOption as ApiSubtitleOption,
 } from '../shared/api.ts';
 import { AnkiFailure, EpisodeNotFound } from './mining.ts';
 
@@ -28,14 +37,24 @@ export interface DictionaryService {
   lookup(text: string): Promise<LookupResponse>;
 }
 
+export interface EpisodeSource extends LibraryEpisode {
+  /** Embedded text subtitle streams, probed when the library was scanned. */
+  embedded: EmbeddedSubtitle[];
+}
+
+export interface SeriesSource extends Omit<LibrarySeries, 'episodes'> {
+  episodes: EpisodeSource[];
+}
+
 export interface LibraryService {
-  series(): Promise<LibrarySeries[]>;
+  series(): Promise<SeriesSource[]>;
   episode(id: string): Promise<{
-    series: LibrarySeries;
-    episode: LibraryEpisode;
-    next: LibraryEpisode | null;
+    series: SeriesSource;
+    episode: EpisodeSource;
+    next: EpisodeSource | null;
     videoPath: string;
-    subtitlePaths: Record<string, string>;
+    /** Absolute path of a sidecar subtitle relative to the media root. */
+    sidecarPath(relative: string): string;
   } | null>;
 }
 
@@ -45,6 +64,12 @@ export interface ProgressService {
   saveProgress(episodeId: string, position: number, duration: number): void;
 }
 
+export interface SubtitleChoicesService {
+  subtitleChoices(seriesId: string): SavedSubtitleChoices;
+  saveSubtitleChoice(seriesId: string, slot: SubtitleSlot, choice: SubtitleKey | 'off'): void;
+  clearSubtitleChoice(seriesId: string, slot: SubtitleSlot): void;
+}
+
 export interface MediaService {
   /** Path of a playable MP4 for the source video, prepared on first request. */
   prepare(key: string, source: string): Promise<string>;
@@ -52,6 +77,10 @@ export interface MediaService {
   prewarm(key: string, source: string): void;
   /** Path of a cached JPEG still for the episode, extracted on first request. */
   thumbnail(key: string, source: string): Promise<string>;
+  /** Path of an extracted embedded subtitle, extracted on first request. */
+  subtitle(key: string, source: string, index: number, format: SubtitleFormat): Promise<string>;
+  /** Starts extracting an embedded subtitle without waiting. */
+  prewarmSubtitle(key: string, source: string, index: number, format: SubtitleFormat): void;
 }
 
 export interface CardService {
@@ -65,6 +94,7 @@ export interface HttpServices {
   library: LibraryService;
   progress: ProgressService;
   media: MediaService;
+  subtitles: SubtitleChoicesService;
   cards: CardService;
   /** Client files: index.html and the bundle. */
   publicDir: string;
@@ -126,7 +156,7 @@ async function route(services: HttpServices, req: IncomingMessage, res: ServerRe
 
   const episodeRoute = /^\/api\/episodes\/([0-9a-f]+)(?:\/(video|progress|thumbnail|subtitles\/([\w-]+)))?$/.exec(path);
   if (episodeRoute) {
-    const [, id = '', action, language] = episodeRoute;
+    const [, id = '', action, optionId] = episodeRoute;
     if (action === 'progress') {
       expectMethod(method, 'PUT');
       return saveProgress(services, req, res, id);
@@ -146,12 +176,30 @@ async function route(services: HttpServices, req: IncomingMessage, res: ServerRe
       }
       return sendPath(req, res, file, 'max-age=86400');
     }
-    if (language !== undefined) {
-      const file = located.subtitlePaths[language];
-      if (file === undefined) throw new HttpError(404, 'no subtitles in that language');
+    if (optionId !== undefined) {
+      const options = buildSubtitleOptions(located.episode.subtitles, located.episode.embedded);
+      const option = options.find((candidate) => candidate.id === optionId);
+      if (!option) throw new HttpError(404, 'no such subtitle');
+      if (option.source === 'sidecar') {
+        if (option.path === null) throw new HttpError(404, 'no such subtitle');
+        return sendPath(req, res, located.sidecarPath(option.path));
+      }
+      if (option.streamIndex === null) throw new HttpError(404, 'no such subtitle');
+      let file: string;
+      try {
+        file = await services.media.subtitle(id, located.videoPath, option.streamIndex, option.format);
+      } catch {
+        throw new HttpError(502, 'cannot extract subtitle');
+      }
       return sendPath(req, res, file);
     }
     return sendJson<EpisodeResponse>(res, 200, describeEpisode(services, located));
+  }
+
+  const seriesRoute = /^\/api\/series\/([0-9a-f]+)\/subtitles$/.exec(path);
+  if (seriesRoute) {
+    expectMethod(method, 'PUT');
+    return saveSubtitleChoice(services, req, res, seriesRoute[1] ?? '');
   }
 
   if (path === '/api/cards') {
@@ -205,7 +253,7 @@ async function describeLibrary(services: HttpServices): Promise<LibraryResponse>
       episodes: s.episodes.map((e) => ({
         id: e.id,
         title: e.title,
-        languages: Object.keys(e.subtitles),
+        languages: episodeLanguages(e),
         position: progress.get(e.id)?.position ?? 0,
         duration: progress.get(e.id)?.duration ?? 0,
         thumbnail: `/api/episodes/${e.id}/thumbnail`,
@@ -220,6 +268,16 @@ async function describeLibrary(services: HttpServices): Promise<LibraryResponse>
   };
 }
 
+/** Sidecar languages plus the ones only embedded streams provide. */
+function episodeLanguages(episode: EpisodeSource): string[] {
+  const languages = new Set(episode.subtitles.map((subtitle) => subtitle.language));
+  for (const stream of episode.embedded) {
+    const language = embeddedSubtitleLanguage(stream);
+    if (language !== null) languages.add(language);
+  }
+  return [...languages].sort();
+}
+
 function describeEpisode(
   services: HttpServices,
   { series, episode, next, videoPath }: NonNullable<Awaited<ReturnType<LibraryService['episode']>>>,
@@ -228,24 +286,34 @@ function describeEpisode(
   if (next) {
     void services.library.episode(next.id).then((n) => n && services.media.prewarm(next.id, n.videoPath));
   }
-  // playerTracks picks languages; map each picked language to its URL.
-  const languageOf = Object.fromEntries(Object.keys(episode.subtitles).map((language) => [language, language]));
-  const tracks = playerTracks(languageOf);
-  const subtitleTrack = (language: string): SubtitleTrack | null => {
-    const format = subtitleFormat(episode.subtitles[language] ?? '');
-    return format && { url: `/api/episodes/${episode.id}/subtitles/${language}`, format };
-  };
-  const ja = tracks.ja === undefined ? null : subtitleTrack(tracks.ja);
-  const zh = tracks.zh === undefined ? null : subtitleTrack(tracks.zh);
+
+  const options = buildSubtitleOptions(episode.subtitles, episode.embedded);
+  for (const option of options) {
+    // Reading a multi-gigabyte source is slow, so extraction starts while the
+    // response is on its way to the player.
+    if (option.source === 'embedded' && option.streamIndex !== null) {
+      services.media.prewarmSubtitle(episode.id, videoPath, option.streamIndex, option.format);
+    }
+  }
+  const selection = selectSubtitles(options, services.subtitles.subtitleChoices(series.id));
+  const subtitleOptions: ApiSubtitleOption[] = options.map((option) => ({
+    id: option.id,
+    slot: option.slot,
+    label: option.label,
+    format: option.format,
+    source: option.source,
+    url: `/api/episodes/${episode.id}/subtitles/${option.id}`,
+  }));
+
   return {
     id: episode.id,
     title: episode.title,
+    seriesId: series.id,
     seriesTitle: series.title,
     video: `/api/episodes/${episode.id}/video`,
-    subtitles: {
-      ...(ja ? { ja } : {}),
-      ...(zh ? { zh } : {}),
-    },
+    subtitleOptions,
+    subtitles: selection.selected,
+    subtitleFallback: selection.fallback,
     position: services.progress.progress(episode.id)?.position ?? 0,
     nextEpisodeId: next?.id ?? null,
   };
@@ -258,6 +326,43 @@ async function saveProgress(services: HttpServices, req: IncomingMessage, res: S
   if (!valid(position) || !valid(duration)) throw new HttpError(400, 'position and duration must be non-negative numbers');
   if (!(await services.library.episode(id))) throw new HttpError(404, 'unknown episode');
   services.progress.saveProgress(id, position, duration);
+  res.writeHead(204).end();
+}
+
+async function saveSubtitleChoice(
+  services: HttpServices,
+  req: IncomingMessage,
+  res: ServerResponse,
+  seriesId: string,
+): Promise<void> {
+  const body = await readJson(req);
+  if (!isRecord(body)) throw new HttpError(400, 'subtitle choice must be a json object');
+  const episodeId = requireString(body.episodeId, 'episodeId');
+  const slot = body.slot;
+  if (slot !== 'ja' && slot !== 'zh') throw new HttpError(400, 'slot must be ja or zh');
+  const option = body.option;
+  if (option !== null && option !== 'default' && typeof option !== 'string') {
+    throw new HttpError(400, 'option must be an id, null or "default"');
+  }
+
+  const located = await services.library.episode(episodeId);
+  if (!located || located.series.id !== seriesId) throw new HttpError(404, 'unknown episode in that series');
+
+  if (option === 'default') {
+    services.subtitles.clearSubtitleChoice(seriesId, slot);
+    res.writeHead(204).end();
+    return;
+  }
+  if (option === null) {
+    services.subtitles.saveSubtitleChoice(seriesId, slot, 'off');
+    res.writeHead(204).end();
+    return;
+  }
+
+  const options = buildSubtitleOptions(located.episode.subtitles, located.episode.embedded);
+  const chosen = options.find((candidate) => candidate.id === option);
+  if (!chosen || chosen.slot !== slot) throw new HttpError(400, 'unknown subtitle option');
+  services.subtitles.saveSubtitleChoice(seriesId, slot, chosen.key);
   res.writeHead(204).end();
 }
 
