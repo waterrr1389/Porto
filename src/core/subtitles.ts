@@ -168,9 +168,16 @@ export function activeCues(cues: readonly Cue[], time: number): Cue[] {
   return active;
 }
 
+/**
+ * Bidirectional formatting marks (U+200E, U+200F, U+202A–U+202E, U+2066–U+2069),
+ * which some releases scatter through Japanese text. They are invisible, but
+ * every one would become a tappable character and split lookups.
+ */
+const BIDI_CONTROLS = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
 function normalizeSource(source: string): string {
   const withoutBom = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source;
-  return withoutBom.replace(/\r\n?/g, '\n');
+  return withoutBom.replace(/\r\n?/g, '\n').replace(BIDI_CONTROLS, '');
 }
 
 /**

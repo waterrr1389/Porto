@@ -215,6 +215,12 @@ test('parseSrt drops ASS override blocks used for positioning', () => {
   assert.deepEqual(parseSrt(source), [{ id: 0, start: 1, end: 2, text: 'パンケーキ' }]);
 });
 
+test('removes invisible bidirectional marks from the text', () => {
+  const source = '1\n00:00:01,000 --> 00:00:02,000\n\u200e（\u200eＮＡ:月見）\u200e今は昔\n';
+
+  assert.deepEqual(parseSrt(source), [{ id: 0, start: 1, end: 2, text: '（ＮＡ:月見）今は昔' }]);
+});
+
 test('parseSrt handles a BOM and CRLF line endings', () => {
   const source = '\ufeff1\r\n00:00:01,000 --> 00:00:02,000\r\nline\r\n';
 
