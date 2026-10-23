@@ -238,6 +238,16 @@ test('lists frequencies and sorts by the smallest leading number', () => {
 });
 
 test('describes the episode in MiscInfo', () => {
+  assert.equal(
+    lapisCard(
+      withInput({
+        episodeNumber: null,
+        seriesTitle: 'Cosmic Princess Kaguya',
+        episodeTitle: '[Feibanyama] Cosmic Princess Kaguya [NF WebRip 1080p]',
+      }),
+    ).fields.MiscInfo,
+    'Cosmic_Princess_Kaguya (10m01s726ms)',
+  );
   assert.equal(lapisCard(BASE).fields.MiscInfo, 'BOCCHI_THE_ROCK! EP08 (10m01s726ms)');
   assert.equal(
     lapisCard(withInput({ episodeNumber: null, episodeTitle: 'The Test', seriesTitle: 'A Show' })).fields.MiscInfo,

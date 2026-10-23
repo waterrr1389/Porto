@@ -2,6 +2,7 @@
 // screenshot and audio clip that have to be captured for it. Definition HTML
 // is rendered by the browser (it owns Yomitan's renderer); this module only
 // embeds it and formats the remaining plain-text fields.
+import { cleanTitle } from './library.ts';
 
 export interface CardInput {
   term: string;
@@ -206,8 +207,13 @@ function frequencySort(frequencies: CardInput['frequencies']): string {
 
 function miscInfo(input: CardInput, formattedTime: string): string {
   const series = input.seriesTitle.replace(/ /g, '_');
+  // A film is a series of one file whose name repeats the series title; naming it twice adds nothing.
   const episode =
-    input.episodeNumber === null ? input.episodeTitle : `EP${String(input.episodeNumber).padStart(2, '0')}`;
+    input.episodeNumber !== null
+      ? `EP${String(input.episodeNumber).padStart(2, '0')}`
+      : cleanTitle(input.episodeTitle) === input.seriesTitle
+        ? ''
+        : input.episodeTitle;
   return [series, episode, `(${formattedTime})`].filter((part) => part !== '').join(' ');
 }
 
