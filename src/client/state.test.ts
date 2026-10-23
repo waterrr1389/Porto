@@ -14,6 +14,7 @@ import {
   CONTROLS_HIDE_MS,
   SAVE_PROGRESS_MS,
   STALL_MS,
+  entryAudioKey,
   initialState,
   reduce,
   type Action,
@@ -231,7 +232,9 @@ test('a successful character lookup opens the panel, pins the line and highlight
 
   assert.equal(done.state.lookup.pending, null);
   assert.equal(done.state.lookup.panelOpen, true);
-  assert.deepEqual(done.state.lookup.history, [{ id: 1, text: '本語です', response: responses.first, mined: {}, duplicates: {} }]);
+  assert.deepEqual(done.state.lookup.history, [
+    { id: 1, text: '本語です', response: responses.first, mined: {}, duplicates: {}, audio: {} },
+  ]);
   assert.deepEqual(done.state.lookup.highlight, { cueId: 0, start: 1, end: 3 });
   assert.deepEqual(done.state.lookup.pinnedJa, [0]);
   assert.deepEqual(done.effects, []);
@@ -655,6 +658,7 @@ test('mining builds a card request from the origin cue, highlight and time', () 
         cue: { start: 0, end: 10, text: '日本語です' },
         highlight: { start: 1, end: 3 },
         time: 12.5,
+        wordAudio: null,
       },
     },
   ]);
@@ -981,4 +985,164 @@ test('a subtitle response from the previous episode is ignored', () => {
     cues: [{ id: 0, start: 0, end: 1, text: '旧的' }],
   });
   assert.equal(stale.state, next);
+});
+
+// ------------------------------------------------------------- word audio
+
+const audioPageId = miningReady.lookup.history[0]?.id as number;
+const audioKey = entryAudioKey('日本語', 'にほんご');
+const recordedAudio = [
+  { name: 'NHK16 ニホンゴ [0]', url: '/api/audio/file?a' },
+  { name: 'Forvo にほんご', url: '/api/audio/file?b' },
+];
+const audioLoading =
+  reduce(miningReady, { type: 'wordAudioRequested', pageId: audioPageId, entryIndex: 0 }).state;
+
+test('the first play tap loads the entry audio lazily', () => {
+  const step = reduce(miningReady, { type: 'wordAudioRequested', pageId: audioPageId, entryIndex: 0 });
+  assert.deepEqual(step.effects, [
+    { type: 'fetchWordAudio', pageId: audioPageId, key: audioKey, term: '日本語', reading: 'にほんご' },
+  ]);
+  assert.deepEqual(step.state.lookup.history[0]?.audio[audioKey], { status: 'loading' });
+
+  const again = reduce(step.state, { type: 'wordAudioRequested', pageId: audioPageId, entryIndex: 0 });
+  assert.equal(again.state, step.state);
+  assert.deepEqual(again.effects, []);
+});
+
+test('the loaded list is stored and its best source plays', () => {
+  const loaded = reduce(audioLoading, {
+    type: 'wordAudioLoaded',
+    pageId: audioPageId,
+    key: audioKey,
+    sources: recordedAudio,
+  });
+  assert.deepEqual(loaded.effects, [{ type: 'playAudio', url: recordedAudio[0]?.url }]);
+  assert.deepEqual(loaded.state.lookup.history[0]?.audio[audioKey], {
+    status: 'list',
+    sources: recordedAudio,
+    selected: 0,
+  });
+
+  const tap = reduce(loaded.state, { type: 'wordAudioRequested', pageId: audioPageId, entryIndex: 0 });
+  assert.deepEqual(tap.effects, [{ type: 'playAudio', url: recordedAudio[0]?.url }]);
+});
+
+test('audio results for pages no longer in history are ignored', () => {
+  const stale = reduce(audioLoading, {
+    type: 'wordAudioLoaded',
+    pageId: 999,
+    key: audioKey,
+    sources: recordedAudio,
+  });
+  assert.equal(stale.state, audioLoading);
+
+  const closed = run(audioLoading, { type: 'panelClosed' }).state;
+  const late = reduce(closed, {
+    type: 'wordAudioLoaded',
+    pageId: audioPageId,
+    key: audioKey,
+    sources: recordedAudio,
+  });
+  assert.equal(late.state, closed);
+
+  const loaded = reduce(audioLoading, {
+    type: 'wordAudioLoaded',
+    pageId: audioPageId,
+    key: audioKey,
+    sources: recordedAudio,
+  }).state;
+  const twice = reduce(loaded, {
+    type: 'wordAudioLoaded',
+    pageId: audioPageId,
+    key: audioKey,
+    sources: recordedAudio,
+  });
+  assert.equal(twice.state, loaded);
+});
+
+test('empty and unreachable audio never play', () => {
+  const empty = reduce(audioLoading, {
+    type: 'wordAudioLoaded',
+    pageId: audioPageId,
+    key: audioKey,
+    sources: [],
+  });
+  assert.deepEqual(empty.state.lookup.history[0]?.audio[audioKey], {
+    status: 'list',
+    sources: [],
+    selected: 0,
+  });
+  assert.deepEqual(empty.effects, []);
+  assert.deepEqual(
+    reduce(empty.state, { type: 'wordAudioRequested', pageId: audioPageId, entryIndex: 0 }).effects,
+    [],
+  );
+
+  const failed = reduce(audioLoading, { type: 'wordAudioFailed', pageId: audioPageId, key: audioKey });
+  assert.deepEqual(failed.state.lookup.history[0]?.audio[audioKey], { status: 'unavailable' });
+  assert.deepEqual(
+    reduce(failed.state, { type: 'wordAudioRequested', pageId: audioPageId, entryIndex: 0 }).effects,
+    [],
+  );
+
+  const lateFailure = reduce(empty.state, { type: 'wordAudioFailed', pageId: audioPageId, key: audioKey });
+  assert.equal(lateFailure.state, empty.state);
+});
+
+test('choosing a source plays it and becomes the selection', () => {
+  const loaded = reduce(audioLoading, {
+    type: 'wordAudioLoaded',
+    pageId: audioPageId,
+    key: audioKey,
+    sources: recordedAudio,
+  }).state;
+  const step = reduce(loaded, {
+    type: 'wordAudioChosen',
+    pageId: audioPageId,
+    entryIndex: 0,
+    index: 1,
+  });
+  assert.deepEqual(step.state.lookup.history[0]?.audio[audioKey], {
+    status: 'list',
+    sources: recordedAudio,
+    selected: 1,
+  });
+  assert.deepEqual(step.effects, [{ type: 'playAudio', url: recordedAudio[1]?.url }]);
+
+  const outOfRange = reduce(loaded, { type: 'wordAudioChosen', pageId: audioPageId, entryIndex: 0, index: 5 });
+  assert.equal(outOfRange.state, loaded);
+});
+
+test('a card uses the selected recording, or null when audio is not loaded', () => {
+  const loaded = reduce(audioLoading, {
+    type: 'wordAudioLoaded',
+    pageId: audioPageId,
+    key: audioKey,
+    sources: recordedAudio,
+  }).state;
+  const chosen = reduce(loaded, {
+    type: 'wordAudioChosen',
+    pageId: audioPageId,
+    entryIndex: 0,
+    index: 1,
+  }).state;
+  const withAudio = createCardEffect(reduce(chosen, { type: 'mineRequested', entryIndex: 0, definitions }));
+  assert.equal(withAudio.request.wordAudio, recordedAudio[1]?.url);
+
+  const withoutAudio = createCardEffect(reduce(miningReady, { type: 'mineRequested', entryIndex: 0, definitions }));
+  assert.equal(withoutAudio.request.wordAudio, null);
+});
+
+test('audio state is kept per expression and reading', () => {
+  const step = reduce(miningReady, { type: 'wordAudioRequested', pageId: audioPageId, entryIndex: 1 });
+  const effect = step.effects[0];
+  assert.equal(effect?.type, 'fetchWordAudio');
+  if (effect?.type === 'fetchWordAudio') {
+    assert.equal(effect.key, entryAudioKey('国語', 'こくご'));
+    assert.equal(effect.term, '国語');
+  }
+  const audio = step.state.lookup.history[0]?.audio;
+  assert.deepEqual(audio?.[entryAudioKey('国語', 'こくご')], { status: 'loading' });
+  assert.equal(audio?.[audioKey], undefined);
 });

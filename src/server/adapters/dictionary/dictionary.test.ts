@@ -52,7 +52,9 @@ before(async () => {
   };
   const subtitles = { subtitleChoices: () => ({}), saveSubtitleChoice: () => {}, clearSubtitleChoice: () => {} };
   const cards = { mine: async () => ({ noteId: 0, duplicates: 0 }), duplicates: async () => ({}) };
-  server = createServer(createHandler({ dictionary, library, progress, media, subtitles, cards, publicDir: dir }));
+  server = createServer(
+    createHandler({ dictionary, library, progress, media, subtitles, audio: null, cards, publicDir: dir }),
+  );
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   assert.ok(address && typeof address === 'object');

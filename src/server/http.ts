@@ -5,6 +5,7 @@ import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
 import { resumeEpisode, type LibraryEpisode, type LibrarySeries } from '../core/library.ts';
+import { audioProxyUrl, localAudioPath, wordAudioPath, type AudioSource } from '../core/local-audio.ts';
 import { decideRange } from '../core/range.ts';
 import {
   buildSubtitleOptions,
@@ -29,6 +30,8 @@ import {
   type LookupResponse,
   type ProgressRequest,
   type SubtitleOption as ApiSubtitleOption,
+  type WordAudio,
+  type WordAudioResponse,
 } from '../shared/api.ts';
 import { AnkiFailure, EpisodeNotFound } from './mining.ts';
 
@@ -89,12 +92,20 @@ export interface CardService {
   duplicates(terms: string[]): Promise<DuplicatesResponse>;
 }
 
+/** The local audio server, or null when word audio is disabled in the config. */
+export interface LocalAudioService {
+  readonly baseUrl: string;
+  list(term: string, reading: string): Promise<AudioSource[]>;
+  fetch(path: string): Promise<{ body: Buffer; contentType: string } | null>;
+}
+
 export interface HttpServices {
   dictionary: DictionaryService;
   library: LibraryService;
   progress: ProgressService;
   media: MediaService;
   subtitles: SubtitleChoicesService;
+  audio: LocalAudioService | null;
   cards: CardService;
   /** Client files: index.html and the bundle. */
   publicDir: string;
@@ -200,6 +211,16 @@ async function route(services: HttpServices, req: IncomingMessage, res: ServerRe
   if (seriesRoute) {
     expectMethod(method, 'PUT');
     return saveSubtitleChoice(services, req, res, seriesRoute[1] ?? '');
+  }
+
+  if (path === '/api/audio') {
+    expectMethod(method, 'GET');
+    return listWordAudio(services, url, res);
+  }
+
+  if (path === '/api/audio/file') {
+    expectMethod(method, 'GET');
+    return sendWordAudio(services, url, req, res);
   }
 
   if (path === '/api/cards') {
@@ -367,7 +388,7 @@ async function saveSubtitleChoice(
 }
 
 async function createCard(services: HttpServices, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const request = parseCardRequest(await readJson(req, MAX_CARD_BODY_BYTES));
+  const request = parseCardRequest(await readJson(req, MAX_CARD_BODY_BYTES), services.audio);
   let response: CardResponse;
   try {
     response = await services.cards.mine(request);
@@ -400,7 +421,67 @@ async function findDuplicates(services: HttpServices, url: URL, res: ServerRespo
   return sendJson<DuplicatesResponse>(res, 200, response);
 }
 
-function parseCardRequest(body: unknown): CardRequest {
+async function listWordAudio(services: HttpServices, url: URL, res: ServerResponse): Promise<void> {
+  const term = url.searchParams.get('term') ?? '';
+  if (term === '' || term.length > MAX_LOOKUP_LENGTH) {
+    throw new HttpError(400, `term must be 1-${MAX_LOOKUP_LENGTH} characters`);
+  }
+  const reading = url.searchParams.get('reading') ?? '';
+  const audio = services.audio;
+  if (audio === null) return sendJson<WordAudioResponse>(res, 200, { audio: [] });
+
+  let sources: AudioSource[];
+  try {
+    sources = await audio.list(term, reading);
+  } catch (error) {
+    throw new HttpError(502, messageOf(error));
+  }
+
+  const entries: WordAudio[] = [];
+  for (const source of sources) {
+    const proxy = audioProxyUrl(audio.baseUrl, source.url);
+    // Files hosted elsewhere are not ours to fetch.
+    if (proxy !== null) entries.push({ name: source.name, url: proxy });
+  }
+  return sendJson<WordAudioResponse>(res, 200, { audio: entries });
+}
+
+async function sendWordAudio(
+  services: HttpServices,
+  url: URL,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const audio = services.audio;
+  if (audio === null) throw new HttpError(404, 'word audio is disabled');
+  const path = localAudioPath(audio.baseUrl, url.searchParams.get('path') ?? '');
+  if (path === null) throw new HttpError(400, 'invalid audio path');
+
+  let file: { body: Buffer; contentType: string } | null;
+  try {
+    file = await audio.fetch(path);
+  } catch (error) {
+    throw new HttpError(502, messageOf(error));
+  }
+  if (file === null) throw new HttpError(404, 'audio not found');
+
+  res.writeHead(200, {
+    'Content-Type': file.contentType,
+    'Content-Length': file.body.length,
+    'Cache-Control': 'max-age=86400',
+  });
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
+  res.end(file.body);
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function parseCardRequest(body: unknown, audio: LocalAudioService | null): CardRequest {
   if (!isRecord(body)) throw new HttpError(400, 'card must be a json object');
 
   const episodeId = requireString(body.episodeId, 'episodeId');
@@ -460,7 +541,24 @@ function parseCardRequest(body: unknown): CardRequest {
     cue,
     highlight,
     time,
+    wordAudio: parseWordAudio(body.wordAudio, audio),
   };
+}
+
+/**
+ * A word recording must be one of our own proxy URLs pointing at a file on the
+ * configured audio server; anything else would make the miner fetch elsewhere.
+ */
+function parseWordAudio(value: unknown, audio: LocalAudioService | null): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || audio === null) {
+    throw new HttpError(400, 'wordAudio must be an audio URL from this server');
+  }
+  const path = wordAudioPath(value);
+  if (path === null || localAudioPath(audio.baseUrl, path) === null) {
+    throw new HttpError(400, 'wordAudio must be an audio URL from this server');
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

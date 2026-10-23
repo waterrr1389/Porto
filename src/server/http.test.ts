@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAnki } from './adapters/anki.ts';
 import { createLibrary } from './adapters/library.ts';
+import { createLocalAudio } from './adapters/local-audio.ts';
 import { createMediaCache } from './adapters/media/index.ts';
 import { openStore } from './adapters/store.ts';
 import { createHandler, type DictionaryService } from './http.ts';
@@ -20,6 +21,7 @@ import type {
   EpisodeResponse,
   LibraryResponse,
   LookupResponse,
+  WordAudioResponse,
 } from '../shared/api.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'sla-http-'));
@@ -28,9 +30,12 @@ const root = join(dir, 'Anime');
 const stateDir = join(dir, 'state');
 const show = join(root, '[Group] Show [1080p]');
 const video = Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 256));
+const AUDIO_BYTES = Buffer.from([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00]);
 const prewarmed: string[] = [];
 let server: Server;
 let base: string;
+let audioServer: Server;
+let audioBase = '';
 
 const cardRoot = join(dir, 'Cards');
 const cardCache = join(dir, 'card-cache');
@@ -67,6 +72,7 @@ const CARD: Omit<CardRequest, 'episodeId'> = {
   cue: { start: 0.2, end: 1.5, text: 'お前は自腹だ' },
   highlight: { start: 3, end: 5 },
   time: 0.8,
+  wordAudio: null,
 };
 
 const dictionary: DictionaryService = {
@@ -86,6 +92,36 @@ before(async () => {
   writeFileSync(join(show, '[Group] Show - 01 [1080p].ja.ass'), '[Events]\n');
   writeFileSync(join(show, '[Group] Show - 01 [1080p].tc.ass'), 'tc');
   writeFileSync(join(show, '[Group] Show - 02 [1080p].mp4'), video);
+
+  audioServer = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    if (url.pathname === '/') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          type: 'audioSourceList',
+          audioSources: [
+            { name: 'Fixture Word', url: `${audioBase}/clips/word.mp3` },
+            { name: 'Elsewhere', url: 'http://example.com/evil.mp3' },
+          ],
+        }),
+      );
+      return;
+    }
+    if (url.pathname === '/clips/word.mp3') {
+      response.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': AUDIO_BYTES.length });
+      response.end(AUDIO_BYTES);
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise<void>((done) => audioServer.listen(0, '127.0.0.1', done));
+  const audioAddress = audioServer.address();
+  assert.ok(audioAddress && typeof audioAddress === 'object');
+  audioBase = `http://127.0.0.1:${audioAddress.port}`;
+  const localAudio = createLocalAudio({ url: audioBase });
+
   const store = openStore(stateDir);
   const media = {
     prepare: async (_key: string, source: string) => source,
@@ -97,7 +133,16 @@ before(async () => {
   const library = createLibrary([root]);
   const cards = { mine: async () => ({ noteId: 0, duplicates: 0 }), duplicates: async () => ({}) };
   server = createServer(
-    createHandler({ dictionary, library, progress: store, media, subtitles: store, cards, publicDir }),
+    createHandler({
+      dictionary,
+      library,
+      progress: store,
+      media,
+      subtitles: store,
+      audio: localAudio,
+      cards,
+      publicDir,
+    }),
   );
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
@@ -220,7 +265,14 @@ before(async () => {
     deck: cardStore.config.anki.deck,
     model: cardStore.config.anki.model,
   });
-  const miner = createMiner({ library: cardLibrary, media: cardMedia, anki, store: cardStore, workDir: cardWorkDir });
+  const miner = createMiner({
+    library: cardLibrary,
+    media: cardMedia,
+    anki,
+    audio: localAudio,
+    store: cardStore,
+    workDir: cardWorkDir,
+  });
   cardServer = createServer(
     createHandler({
       dictionary,
@@ -228,6 +280,7 @@ before(async () => {
       progress: cardStore,
       media: cardMedia,
       subtitles: cardStore,
+      audio: localAudio,
       cards: miner,
       publicDir,
     }),
@@ -245,6 +298,7 @@ after(() => {
   server.close();
   cardServer.close();
   ankiServer.close();
+  audioServer.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -275,6 +329,71 @@ test('reports failures as 500 json', async () => {
   const res = await fetch(`${base}/api/lookup?text=boom`);
   assert.equal(res.status, 500);
   assert.deepEqual(await res.json(), { error: 'internal error' });
+});
+
+test('lists word audio and proxies same-origin files', async () => {
+  const res = await fetch(`${base}/api/audio?term=${encodeURIComponent('先輩')}&reading=${encodeURIComponent('せんぱい')}`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as WordAudioResponse;
+  assert.equal(body.audio.length, 1, 'files on other origins are dropped');
+  assert.equal(body.audio[0]?.name, 'Fixture Word');
+  const url = body.audio[0]?.url ?? '';
+  assert.match(url, /^\/api\/audio\/file\?path=/);
+
+  const file = await fetch(`${base}${url}`);
+  assert.equal(file.status, 200);
+  assert.equal(file.headers.get('content-type'), 'audio/mpeg');
+  assert.match(file.headers.get('cache-control') ?? '', /max-age=86400/);
+  assert.deepEqual(Buffer.from(await file.arrayBuffer()), AUDIO_BYTES);
+});
+
+test('validates word audio requests and proxy paths', async () => {
+  assert.equal((await fetch(`${base}/api/audio`)).status, 400);
+  assert.equal((await fetch(`${base}/api/audio?term=`)).status, 400);
+  assert.equal((await fetch(`${base}/api/audio?term=${encodeURIComponent('あ'.repeat(65))}`)).status, 400);
+
+  const fileUrl = (path: string) => `${base}/api/audio/file?path=${encodeURIComponent(path)}`;
+  for (const path of [
+    '',
+    '../etc/passwd',
+    '/a/../b.mp3',
+    'http://example.com/a.mp3',
+    '//example.com/a.mp3',
+    'http://127.0.0.1:1/x.mp3',
+  ]) {
+    assert.equal((await fetch(fileUrl(path))).status, 400, path);
+  }
+  assert.equal((await fetch(fileUrl('/clips/missing.mp3'))).status, 404);
+});
+
+test('reports an unavailable local audio server and handles a disabled one', async () => {
+  const probe = createServer();
+  await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
+  const probeAddress = probe.address();
+  assert.ok(probeAddress && typeof probeAddress === 'object');
+  const deadUrl = `http://127.0.0.1:${probeAddress.port}`;
+  await new Promise<void>((done) => probe.close(() => done()));
+
+  const unreachable = await startAudioTestServer(createLocalAudio({ url: deadUrl }));
+  try {
+    const res = await fetch(`${unreachable.url}/api/audio?term=${encodeURIComponent('先輩')}`);
+    assert.equal(res.status, 502);
+  } finally {
+    await unreachable.close();
+  }
+
+  const disabled = await startAudioTestServer(null);
+  try {
+    const res = await fetch(`${disabled.url}/api/audio?term=${encodeURIComponent('先輩')}`);
+    assert.equal(res.status, 200);
+    assert.deepEqual((await res.json()) as WordAudioResponse, { audio: [] });
+    assert.equal(
+      (await fetch(`${disabled.url}/api/audio/file?path=${encodeURIComponent('/clips/word.mp3')}`)).status,
+      404,
+    );
+  } finally {
+    await disabled.close();
+  }
 });
 
 test('unknown api paths and methods', async () => {
@@ -500,6 +619,32 @@ function postCard(baseUrl: string, body: unknown): Promise<Response> {
   });
 }
 
+/** A second app server, for audio settings that differ from the main one. */
+async function startAudioTestServer(
+  audio: ReturnType<typeof createLocalAudio> | null,
+): Promise<{ url: string; close(): Promise<void> }> {
+  const store = openStore(stateDir);
+  const library = createLibrary([root]);
+  const media = {
+    prepare: async (_key: string, source: string) => source,
+    prewarm: () => {},
+    thumbnail: async (_key: string, source: string) => source,
+    subtitle: async () => '',
+    prewarmSubtitle: () => {},
+  };
+  const cards = { mine: async () => ({ noteId: 0, duplicates: 0 }), duplicates: async () => ({}) };
+  const extra = createServer(
+    createHandler({ dictionary, library, progress: store, media, subtitles: store, audio, cards, publicDir }),
+  );
+  await new Promise<void>((done) => extra.listen(0, '127.0.0.1', done));
+  const address = extra.address();
+  assert.ok(address && typeof address === 'object');
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((done) => extra.close(() => done())),
+  };
+}
+
 test('creates a card, captures its media and records the note', async () => {
   resetAnki();
   const res = await postCard(cardBase, { ...CARD, episodeId: cardEpisodeId });
@@ -536,6 +681,7 @@ test('creates a card, captures its media and records the note', async () => {
   assert.equal(note.modelName, cardStore.config.anki.model);
   assert.equal(note.fields.Expression, '自腹');
   assert.equal(note.fields.ExpressionFurigana, '自腹[じばら]');
+  assert.equal(note.fields.ExpressionAudio, '');
   assert.equal(note.fields.Sentence, 'お前は<b>自腹</b>だ');
   assert.equal(note.fields.Picture, `<img alt="snapshot" src="${image.fileName}">`);
   assert.equal(note.fields.SentenceAudio, `[sound:${audio.fileName}]`);
@@ -615,6 +761,41 @@ test('accepts card bodies larger than the progress limit', async () => {
   assert.equal(res.status, 200);
 });
 
+test('stores the chosen word audio and fills ExpressionAudio', async () => {
+  resetAnki();
+  const wordAudio = `/api/audio/file?path=${encodeURIComponent('/clips/word.mp3')}`;
+  const res = await postCard(cardBase, { ...CARD, episodeId: cardEpisodeId, wordAudio });
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()) as CardResponse, { noteId: 777, duplicates: 0 });
+
+  const word = storedMedia.find((file) => /_word_[0-9a-f]+\.mp3$/.test(file.fileName));
+  assert.ok(word, storedMedia.map((file) => file.fileName).join(','));
+  assert.equal(word.existed, true, 'the file exists when Anki copies it');
+  const note = ankiRequests.at(-1)?.params.note as { fields: Record<string, string> };
+  assert.equal(note.fields.ExpressionAudio, `[sound:${word.fileName}]`);
+});
+
+test('rejects invalid word audio and still mines when the recording is missing', async () => {
+  resetAnki();
+  for (const wordAudio of [
+    'http://example.com/x.mp3',
+    '/api/audio/file?path=..%2Fsecret',
+    '/api/other?path=%2Fclips%2Fword.mp3',
+  ]) {
+    const res = await postCard(cardBase, { ...CARD, episodeId: cardEpisodeId, wordAudio });
+    assert.equal(res.status, 400, wordAudio);
+  }
+  assert.equal(ankiRequests.length, 0);
+
+  resetAnki();
+  const missing = `/api/audio/file?path=${encodeURIComponent('/clips/missing.mp3')}`;
+  const res = await postCard(cardBase, { ...CARD, episodeId: cardEpisodeId, wordAudio: missing });
+  assert.equal(res.status, 200);
+  assert.equal(storedMedia.some((file) => file.fileName.includes('_word_')), false);
+  const note = ankiRequests.at(-1)?.params.note as { fields: Record<string, string> };
+  assert.equal(note.fields.ExpressionAudio, '');
+});
+
 test('rejects invalid card bodies', async () => {
   const valid = { ...CARD, episodeId: cardEpisodeId };
   const invalid: unknown[] = [
@@ -664,9 +845,25 @@ test('returns 502 when Anki cannot be reached', async () => {
     subsDir: join(cardCache, 'down-subs'),
     limitBytes: 1_000_000_000,
   });
-  const cards = createMiner({ library, media, anki, store: cardStore, workDir: join(cardCache, 'down-cards') });
+  const cards = createMiner({
+    library,
+    media,
+    anki,
+    audio: createLocalAudio({ url: audioBase }),
+    store: cardStore,
+    workDir: join(cardCache, 'down-cards'),
+  });
   const downServer = createServer(
-    createHandler({ dictionary, library, progress: cardStore, media, subtitles: cardStore, cards, publicDir }),
+    createHandler({
+      dictionary,
+      library,
+      progress: cardStore,
+      media,
+      subtitles: cardStore,
+      audio: createLocalAudio({ url: audioBase }),
+      cards,
+      publicDir,
+    }),
   );
   await new Promise<void>((done) => downServer.listen(0, '127.0.0.1', done));
   const downAddress = downServer.address();

@@ -16,6 +16,13 @@ export interface Config {
   /** Upper bound for remuxed episodes in cache/, in gigabytes. */
   cacheLimitGB: number;
   anki: AnkiConfig;
+  /** Word audio server, or null to disable word audio. */
+  localAudio: LocalAudioConfig | null;
+}
+
+export interface LocalAudioConfig {
+  /** Base URL of the Local Audio Server for Yomichan add-on. */
+  url: string;
 }
 
 export interface AnkiConfig {
@@ -65,6 +72,7 @@ export const DEFAULT_CONFIG: Config = {
   mediaRoots: [],
   cacheLimitGB: 20,
   anki: { url: 'http://127.0.0.1:8765', apiKey: null, deck: 'Mining', model: 'Lapis' },
+  localAudio: { url: 'http://127.0.0.1:5050' },
 };
 
 /**
@@ -83,6 +91,9 @@ export function openStore(dir: string): Store {
     ...DEFAULT_CONFIG,
     ...storedConfig,
     anki: { ...DEFAULT_CONFIG.anki, ...storedConfig?.anki },
+    // A stored null disables word audio; a missing key takes the default.
+    localAudio:
+      storedConfig?.localAudio === undefined ? DEFAULT_CONFIG.localAudio : storedConfig.localAudio,
   };
 
   const positions = new Map(Object.entries(readJson<Record<string, Progress>>(progressPath) ?? {}));

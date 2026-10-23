@@ -113,6 +113,24 @@ export interface CardRequest {
   highlight: { start: number; end: number };
   /** Playback time of the lookup, in seconds; the screenshot is taken there. */
   time: number;
+  /** `url` of the WordAudio to store in ExpressionAudio, or null to leave it empty. */
+  wordAudio: string | null;
+}
+
+/**
+ * GET /api/audio?term=<term>&reading=<reading> — recordings of a word from the
+ * local audio server (the Anki add-on "Local Audio Server for Yomichan"), best
+ * first. An empty list when it has none; 502 when it is not reachable.
+ */
+export interface WordAudioResponse {
+  audio: WordAudio[];
+}
+
+export interface WordAudio {
+  /** Source label as the local audio server names it, e.g. "NHK16 センパイ [0]". */
+  name: string;
+  /** Same-origin URL that serves the recording (GET /api/audio/file?…). */
+  url: string;
 }
 
 export interface CardResponse {

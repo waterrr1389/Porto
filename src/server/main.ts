@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createAnki } from './adapters/anki.ts';
 import { openDictionary } from './adapters/dictionary/index.ts';
 import { createLibrary } from './adapters/library.ts';
+import { createLocalAudio } from './adapters/local-audio.ts';
 import { createMediaCache } from './adapters/media/index.ts';
 import { openStore } from './adapters/store.ts';
 import { createHandler } from './http.ts';
@@ -30,7 +31,8 @@ const library = createLibrary(store.config.mediaRoots, {
   embeddedSubtitles: (source) => media.embeddedSubtitles(source),
 });
 const anki = createAnki(store.config.anki);
-const cards = createMiner({ library, media, anki, store, workDir: join(paths.cache, 'cards') });
+const audio = store.config.localAudio === null ? null : createLocalAudio(store.config.localAudio);
+const cards = createMiner({ library, media, anki, audio, store, workDir: join(paths.cache, 'cards') });
 
 const handler = createHandler({
   dictionary,
@@ -38,6 +40,7 @@ const handler = createHandler({
   progress: store,
   media,
   subtitles: store,
+  audio,
   cards,
   publicDir: paths.public,
 });

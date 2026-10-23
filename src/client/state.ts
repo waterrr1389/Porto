@@ -19,6 +19,7 @@ import {
   type LookupResponse,
   type SubtitleOption,
   type SubtitleSlot,
+  type WordAudio,
 } from '../shared/api.ts';
 
 export type Track = SubtitleSlot;
@@ -51,6 +52,19 @@ export interface LookupPage {
   mined: Record<number, EntryMining>;
   /** Deck counts by term; 'unavailable' when Anki could not be reached; undefined while checking. */
   duplicates?: Record<string, number> | 'unavailable';
+  /** Pronunciation recordings by entry key; a missing key has not been fetched yet. */
+  audio: Record<string, EntryAudio>;
+}
+
+/** Where the pronunciation lookup for one entry stands. */
+export type EntryAudio =
+  | { status: 'loading' }
+  | { status: 'list'; sources: WordAudio[]; selected: number }
+  | { status: 'unavailable' };
+
+/** Audio state is shared by entries with the same expression and reading. */
+export function entryAudioKey(term: string, reading: string): string {
+  return `${term}\u0000${reading}`;
 }
 
 /** Where creating a card for one entry stands. */
@@ -148,6 +162,10 @@ export type Action =
   | { type: 'mineRequested'; entryIndex: number; definitions: { dictionary: string; html: string }[] }
   | { type: 'mineSucceeded'; entryIndex: number; response: CardResponse; pageText?: string }
   | { type: 'mineFailed'; entryIndex: number; message: string }
+  | { type: 'wordAudioRequested'; pageId: number; entryIndex: number }
+  | { type: 'wordAudioLoaded'; pageId: number; key: string; sources: WordAudio[] }
+  | { type: 'wordAudioFailed'; pageId: number; key: string }
+  | { type: 'wordAudioChosen'; pageId: number; entryIndex: number; index: number }
   | { type: 'panelBack' }
   | { type: 'panelClosed' }
   | { type: 'stageTapped' }
@@ -179,6 +197,8 @@ export type Effect =
   | { type: 'saveProgress'; episodeId: string }
   | { type: 'lookup'; seq: number; text: string }
   | { type: 'checkDuplicates'; pageId: number; terms: string[] }
+  | { type: 'fetchWordAudio'; pageId: number; key: string; term: string; reading: string }
+  | { type: 'playAudio'; url: string }
   | { type: 'createCard'; request: CardRequest; entryIndex: number }
   | { type: 'play' }
   | { type: 'pause' }
@@ -448,6 +468,35 @@ export function reduce(state: State, action: Action): Step {
         }),
       );
     }
+
+    case 'wordAudioRequested':
+      return requestWordAudio(state, action.pageId, action.entryIndex);
+
+    case 'wordAudioLoaded': {
+      const page = findPage(state, action.pageId);
+      if (page === undefined || page.audio[action.key]?.status !== 'loading') return only(state);
+      const sources = action.sources;
+      const updated = updatePage(state, page, {
+        ...page,
+        audio: { ...page.audio, [action.key]: { status: 'list', sources, selected: 0 } },
+      });
+      const first = sources[0];
+      return first === undefined ? only(updated) : { state: updated, effects: [{ type: 'playAudio', url: first.url }] };
+    }
+
+    case 'wordAudioFailed': {
+      const page = findPage(state, action.pageId);
+      if (page === undefined || page.audio[action.key]?.status !== 'loading') return only(state);
+      return only(
+        updatePage(state, page, {
+          ...page,
+          audio: { ...page.audio, [action.key]: { status: 'unavailable' } },
+        }),
+      );
+    }
+
+    case 'wordAudioChosen':
+      return chooseWordAudio(state, action.pageId, action.entryIndex, action.index);
 
     case 'panelBack': {
       const { lookup } = state;
@@ -743,6 +792,7 @@ function acceptLookup(state: State, seq: number, text: string, response: LookupR
     response,
     mined: {},
     duplicates: terms.length === 0 ? {} : undefined,
+    audio: {},
   };
   const effects: Effect[] = terms.length === 0 ? [] : [{ type: 'checkDuplicates', pageId, terms }];
   const base: LookupState = { ...lookup, nextPageId: pageId + 1, pending: null };
@@ -816,6 +866,7 @@ function mineEntry(
     cue: { start: cue.start, end: cue.end, text: cue.text },
     highlight: { start: highlight.start, end: highlight.end },
     time: originTime,
+    wordAudio: wordAudioForEntry(page, entryIndex),
   };
   return {
     state: updatePage(state, page, {
@@ -824,6 +875,58 @@ function mineEntry(
     }),
     effects: [{ type: 'createCard', request, entryIndex }],
   };
+}
+
+/** Plays the selected recording, or starts the lazy audio lookup for this entry. */
+function requestWordAudio(state: State, pageId: number, entryIndex: number): Step {
+  const page = findPage(state, pageId);
+  if (page === undefined) return only(state);
+  const headword = page.response.entries[entryIndex]?.headwords[0];
+  if (headword === undefined) return only(state);
+
+  const key = entryAudioKey(headword.term, headword.reading);
+  const audio = page.audio[key];
+  if (audio?.status === 'list') {
+    const source = audio.sources[audio.selected];
+    return source === undefined ? only(state) : { state, effects: [{ type: 'playAudio', url: source.url }] };
+  }
+  if (audio !== undefined) return only(state);
+
+  return {
+    state: updatePage(state, page, { ...page, audio: { ...page.audio, [key]: { status: 'loading' } } }),
+    effects: [{ type: 'fetchWordAudio', pageId, key, term: headword.term, reading: headword.reading }],
+  };
+}
+
+/** Picks a recording source and plays it straight away. */
+function chooseWordAudio(state: State, pageId: number, entryIndex: number, index: number): Step {
+  const page = findPage(state, pageId);
+  if (page === undefined) return only(state);
+  const headword = page.response.entries[entryIndex]?.headwords[0];
+  if (headword === undefined) return only(state);
+
+  const key = entryAudioKey(headword.term, headword.reading);
+  const audio = page.audio[key];
+  if (audio?.status !== 'list') return only(state);
+  const source = audio.sources[index];
+  if (source === undefined) return only(state);
+
+  return {
+    state: updatePage(state, page, {
+      ...page,
+      audio: { ...page.audio, [key]: { ...audio, selected: index } },
+    }),
+    effects: [{ type: 'playAudio', url: source.url }],
+  };
+}
+
+/** The chosen recording for a card, or null when audio was never loaded. */
+function wordAudioForEntry(page: LookupPage, entryIndex: number): string | null {
+  const headword = page.response.entries[entryIndex]?.headwords[0];
+  if (headword === undefined) return null;
+  const audio = page.audio[entryAudioKey(headword.term, headword.reading)];
+  if (audio?.status !== 'list') return null;
+  return audio.sources[audio.selected]?.url ?? null;
 }
 
 /** Finds the page still waiting for this entry's card, newest first. */

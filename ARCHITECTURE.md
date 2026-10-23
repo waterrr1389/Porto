@@ -42,6 +42,7 @@ the whole contract; nothing imports a module's other files.
 | `scan` | From a tap position in a cue, the text to look up; from a match length, the characters to highlight. |
 | `library` | From a directory listing, which files are episodes of which series and which subtitle files belong to each, by language. |
 | `subtitle-options` | Choose a subtitle per language slot from sidecar files and embedded streams; stable keys remember a series-wide choice. |
+| `local-audio` | Parse the local audio server's Yomitan audio source list, build same-origin proxy URLs and validate requested paths. |
 | `css` | Scope a dictionary's bundled stylesheet to that dictionary's definitions. |
 | `range` | From an HTTP Range header and a file size, whether to answer 200, 206 with a byte range, or 416. |
 | `card` | From the looked-up term, the current cue, the rendered definition HTML and a field template: the Anki note fields and the screenshot time / audio clip window. Never renders HTML itself. |
@@ -62,6 +63,7 @@ depend on each other only through this file.
 | `adapters/media` | ffmpeg: whole-episode remux into `cache/` on first request, screenshots, audio clips, embedded subtitle extraction; LRU cache. |
 | `adapters/dictionary` | Yomitan importer and translator over a SQLite store. |
 | `adapters/anki` | AnkiConnect calls: store media (by file path, same machine), add notes, find existing notes. |
+| `adapters/local-audio` | The "Local Audio Server for Yomichan" add-on: word recordings by term and reading, and file bytes for the proxy. |
 | `adapters/store` | Durable user state under `state/`: config, playback positions, subtitle choices, mined-card history. |
 
 ### `src/client/`

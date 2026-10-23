@@ -45,6 +45,7 @@ const BASE: CardInput = {
   seriesTitle: 'BOCCHI THE ROCK!',
   episodeNumber: 8,
   episodeTitle: '',
+  wordAudio: null,
 };
 
 function withInput(overrides: Partial<CardInput>): CardInput {
@@ -135,6 +136,7 @@ test('names files after the series with a timestamp', () => {
   assert.deepEqual(media, {
     screenshot: { time: 601.726, fileName: 'bocchitherock_10m01s726ms.jpg' },
     audio: { start: 599.92, end: 602.43, fileName: 'bocchitherock_09m59s920ms_10m02s430ms.mp3' },
+    wordAudio: null,
   });
   assert.equal(lapisCard(BASE).fields.Picture, '<img alt="snapshot" src="bocchitherock_10m01s726ms.jpg">');
   assert.equal(
@@ -271,6 +273,22 @@ test('exports the duplicate query used by the card and the duplicate counts', ()
   assert.equal(duplicateQuery('自腹'), 'Expression:"自腹"');
   assert.equal(duplicateQuery('a"b*c_d\\e'), 'Expression:"a\\"b\\*c\\_d\\\\e"');
   assert.equal(lapisCard(BASE).duplicateQuery, duplicateQuery(BASE.term));
+});
+
+test('stores the chosen word recording in ExpressionAudio', () => {
+  const wordAudio = { id: '/api/audio/file?path=%2Fclips%2Fword.mp3', extension: 'mp3' };
+  const plan = lapisCard(withInput({ wordAudio }));
+  const fileName = plan.media.wordAudio?.fileName;
+  assert.ok(fileName);
+  assert.match(fileName, /^bocchitherock_word_[0-9a-f]+\.mp3$/);
+  assert.equal(plan.fields.ExpressionAudio, `[sound:${fileName}]`);
+
+  // The same recording gets the same name, so Anki stores it once.
+  assert.equal(lapisCard(withInput({ wordAudio })).media.wordAudio?.fileName, fileName);
+
+  const none = lapisCard(BASE);
+  assert.equal(none.fields.ExpressionAudio, '');
+  assert.equal(none.media.wordAudio, null);
 });
 
 test('leaves unused fields empty', () => {

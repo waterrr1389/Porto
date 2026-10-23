@@ -13,6 +13,7 @@ import type {
   ProgressRequest,
   SubtitleChoiceRequest,
   SubtitleSlot,
+  WordAudioResponse,
 } from '../shared/api.ts';
 import type { Action, Effect, Timer } from './state.ts';
 
@@ -39,6 +40,9 @@ function parseSubtitleText(slot: SubtitleSlot, format: SubtitleFormat, text: str
 
 export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Dispatch): (effect: Effect) => void {
   const timers = new Map<Timer, ReturnType<typeof setTimeout>>();
+  // A plain element, separate from the video's Web Audio graph, so word clips
+  // do not pass through the volume attenuation.
+  let audio: HTMLAudioElement | null = null;
 
   return (effect) => {
     switch (effect.type) {
@@ -139,6 +143,29 @@ export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Di
           .catch(() => dispatch({ type: 'duplicatesFailed', pageId: effect.pageId }));
         return;
       }
+
+      case 'fetchWordAudio': {
+        const params = new URLSearchParams({ term: effect.term, reading: effect.reading });
+        getJson<WordAudioResponse>(`/api/audio?${params.toString()}`)
+          .then((response) => {
+            dispatch({
+              type: 'wordAudioLoaded',
+              pageId: effect.pageId,
+              key: effect.key,
+              sources: response.audio,
+            });
+          })
+          .catch(() => dispatch({ type: 'wordAudioFailed', pageId: effect.pageId, key: effect.key }));
+        return;
+      }
+
+      case 'playAudio':
+        if (audio === null) audio = new Audio();
+        audio.pause();
+        audio.src = effect.url;
+        audio.currentTime = 0;
+        void audio.play().catch(() => {});
+        return;
 
       case 'createCard':
         postCard(effect.request)

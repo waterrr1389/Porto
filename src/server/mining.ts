@@ -2,11 +2,13 @@
 // video, checks the deck for the same expression and adds the note. The
 // temporary media lives under cache/ and is deleted once AnkiConnect has
 // copied the files into its collection.
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { duplicateQuery, lapisCard } from '../core/card.ts';
+import { audioFileExtension, localAudioPath, wordAudioPath } from '../core/local-audio.ts';
 import type { CardRequest, CardResponse } from '../shared/api.ts';
 import type { Anki } from './adapters/anki.ts';
+import type { LocalAudio } from './adapters/local-audio.ts';
 import type { Library } from './adapters/library.ts';
 import type { MediaCache } from './adapters/media/index.ts';
 import type { Store } from './adapters/store.ts';
@@ -15,6 +17,8 @@ export interface MinerOptions {
   library: Library;
   media: MediaCache;
   anki: Anki;
+  /** The local word audio server, or null when word audio is disabled. */
+  audio: LocalAudio | null;
   store: Store;
   /** Parent directory for per-card temporary media, e.g. cache/cards. */
   workDir: string;
@@ -43,11 +47,30 @@ export class AnkiFailure extends Error {
 }
 
 export function createMiner(options: MinerOptions): Miner {
+  async function fetchWordAudio(url: string): Promise<{ bytes: Buffer; extension: string } | null> {
+    if (options.audio === null) return null;
+    const path = wordAudioPath(url);
+    if (path === null) return null;
+    const valid = localAudioPath(options.audio.baseUrl, path);
+    if (valid === null) return null;
+    try {
+      const file = await options.audio.fetch(valid);
+      if (file === null) return null;
+      return { bytes: file.body, extension: audioFileExtension(file.contentType, valid) };
+    } catch (error) {
+      // A missing recording must not cost the card; the field just stays empty.
+      console.warn('mining: word audio failed:', error instanceof Error ? error.message : error);
+      return null;
+    }
+  }
+
   return {
     async mine(request) {
       const located = await options.library.episode(request.episodeId);
       if (!located) throw new EpisodeNotFound(`unknown episode: ${request.episodeId}`);
 
+      const wordAudioUrl = request.wordAudio;
+      const wordAudio = wordAudioUrl === null ? null : await fetchWordAudio(wordAudioUrl);
       const plan = lapisCard({
         term: request.term,
         reading: request.reading,
@@ -60,6 +83,10 @@ export function createMiner(options: MinerOptions): Miner {
         seriesTitle: located.series.title,
         episodeNumber: located.episode.number,
         episodeTitle: located.episode.title,
+        wordAudio:
+          wordAudioUrl === null || wordAudio === null
+            ? null
+            : { id: wordAudioUrl, extension: wordAudio.extension },
       });
 
       await mkdir(options.workDir, { recursive: true });
@@ -71,11 +98,16 @@ export function createMiner(options: MinerOptions): Miner {
           { path: screenshotPath, fileName: plan.media.screenshot.fileName },
           { path: audioPath, fileName: plan.media.audio.fileName },
         ];
-
-        await Promise.all([
+        const writes = [
           options.media.screenshot(located.videoPath, plan.media.screenshot.time, screenshotPath),
           options.media.audioClip(located.videoPath, plan.media.audio.start, plan.media.audio.end, audioPath),
-        ]);
+        ];
+        if (wordAudio !== null && plan.media.wordAudio !== null) {
+          const wordPath = join(cardDir, plan.media.wordAudio.fileName);
+          media.push({ path: wordPath, fileName: plan.media.wordAudio.fileName });
+          writes.push(writeFile(wordPath, wordAudio.bytes));
+        }
+        await Promise.all(writes);
 
         let duplicateCount: number;
         let noteId: number;

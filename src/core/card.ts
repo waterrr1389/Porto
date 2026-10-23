@@ -1,7 +1,8 @@
 // Builds the fields of a "Lapis" Anki note for a mined sentence, plus the
-// screenshot and audio clip that have to be captured for it. Definition HTML
+// screenshot and audio clips that have to be captured for it. Definition HTML
 // is rendered by the browser (it owns Yomitan's renderer); this module only
 // embeds it and formats the remaining plain-text fields.
+import { stableId } from './library.ts';
 import { cleanTitle } from './library.ts';
 
 export interface CardInput {
@@ -20,11 +21,15 @@ export interface CardInput {
   seriesTitle: string;
   episodeNumber: number | null;
   episodeTitle: string;
+  /** Chosen word recording: a stable id and its file extension, or null when none. */
+  wordAudio: { id: string; extension: string } | null;
 }
 
 export interface MediaPlan {
   screenshot: { time: number; fileName: string };
   audio: { start: number; end: number; fileName: string };
+  /** Word recording stored with the note, or null when there is none. */
+  wordAudio: { fileName: string } | null;
 }
 
 export interface CardPlan {
@@ -42,12 +47,16 @@ export function lapisCard(input: CardInput, options: { audioPaddingS?: number } 
   const audioStart = Math.max(0, input.cue.start - padding);
   const audioEnd = input.cue.end + padding;
   const audioFile = `${prefix}_${formatTime(audioStart)}_${formatTime(audioEnd)}.mp3`;
+  const wordAudioFile =
+    input.wordAudio === null
+      ? null
+      : `${prefix}_word_${stableId(input.wordAudio.id)}.${wordAudioExtension(input.wordAudio.extension)}`;
 
   const fields: Record<string, string> = {
     Expression: input.term,
     ExpressionFurigana: furigana(input.term, input.reading),
     ExpressionReading: input.reading || input.term,
-    ExpressionAudio: '',
+    ExpressionAudio: wordAudioFile === null ? '' : `[sound:${wordAudioFile}]`,
     SelectionText: '',
     MainDefinition: definitionList(input.definitions.slice(0, 1)),
     DefinitionPicture: '',
@@ -73,6 +82,7 @@ export function lapisCard(input: CardInput, options: { audioPaddingS?: number } 
     media: {
       screenshot: { time: input.time, fileName: screenshotFile },
       audio: { start: audioStart, end: audioEnd, fileName: audioFile },
+      wordAudio: wordAudioFile === null ? null : { fileName: wordAudioFile },
     },
     duplicateQuery: duplicateQuery(input.term),
   };
@@ -86,6 +96,12 @@ export function duplicateQuery(term: string): string {
 /** File-name stem for an episode: lower-case ASCII letters and digits only. */
 function seriesPrefix(seriesTitle: string): string {
   return seriesTitle.toLowerCase().replace(/[^a-z0-9]/g, '') || 'episode';
+}
+
+/** Extensions come from the audio server; anything unexpected falls back to mp3. */
+function wordAudioExtension(extension: string): string {
+  const safe = extension.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return safe === '' ? 'mp3' : safe;
 }
 
 /** `09m59s920ms`; minutes are total minutes, so long videos do not wrap. */
