@@ -155,7 +155,7 @@ The source is reloaded at the current position only on an `error` event, or
 when `waiting` lasts over 8 s with `readyState < 3`; `stalled` alone is normal
 and ignored. After reloading, the position is set on `loadedmetadata`, and
 playback resumes only if it was playing before. The cache is bounded by an LRU
-size limit set in `state/config` (default 50 GB); files still being written are
+size limit set in `state/config` (default 20 GB); files still being written are
 never evicted.
 
 HLS was considered and rejected for now: with copied video, segments can only

@@ -60,10 +60,11 @@ export interface Store {
   clearSubtitleChoice(seriesId: string, slot: SubtitleSlot): void;
 }
 
+/** Written on first start; the user fills in `mediaRoots` and the deck. */
 export const DEFAULT_CONFIG: Config = {
-  mediaRoots: ['/srv/anime'],
-  cacheLimitGB: 50,
-  anki: { url: 'http://127.0.0.1:8765', apiKey: null, deck: 'JP::Mining', model: 'Lapis' },
+  mediaRoots: [],
+  cacheLimitGB: 20,
+  anki: { url: 'http://127.0.0.1:8765', apiKey: null, deck: 'Mining', model: 'Lapis' },
 };
 
 /**

@@ -476,7 +476,7 @@ test('progress is saved durably and offered for resume', async () => {
 
   const saved = JSON.parse(readFileSync(join(stateDir, 'progress.json'), 'utf8')) as Record<string, { position: number }>;
   assert.equal(saved[id]?.position, 120.5);
-  assert.deepEqual(JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8')).cacheLimitGB, 50);
+  assert.deepEqual(JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8')).cacheLimitGB, 20);
 });
 
 test('paths cannot escape their directory', async () => {

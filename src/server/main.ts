@@ -23,6 +23,9 @@ const media = createMediaCache({
   subsDir: join(paths.cache, 'subs'),
   limitBytes: store.config.cacheLimitGB * 1e9,
 });
+if (store.config.mediaRoots.length === 0) {
+  console.warn(`no media roots configured; add directories to mediaRoots in ${join(paths.state, 'config.json')}`);
+}
 const library = createLibrary(store.config.mediaRoots, {
   embeddedSubtitles: (source) => media.embeddedSubtitles(source),
 });
