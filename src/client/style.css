@@ -153,7 +153,21 @@ button svg { display: block; pointer-events: none; }
   font: inherit; font-size: 15px; white-space: nowrap; }
 #top-bar button[hidden] { display: none; }
 #top-bar #library, #top-bar #next:not([hidden]) { display: flex; align-items: center; justify-content: center; gap: 2px; }
-#top-bar #fullscreen { padding: 0; display: grid; place-items: center; }
+#top-bar #fullscreen, #top-bar #volume-button { padding: 0; display: grid; place-items: center; }
+#volume-button[data-level="low"] .wave1, #volume-button[data-level="low"] .wave2,
+#volume-button[data-level="mid"] .wave2 { opacity: .25; }
+
+/* Volume: a slim capsule under its button that fills from the bottom, with
+   hairline gaps marking the levels, like the system volume control. */
+#volume { position: absolute; top: calc(env(safe-area-inset-top) + 66px);
+  padding: 6px; border-radius: 26px; border: 1px solid rgba(255,255,255,.14);
+  background: rgba(40,40,44,.45); -webkit-backdrop-filter: blur(24px) saturate(170%); backdrop-filter: blur(24px) saturate(170%);
+  box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#volume[hidden] { display: none; }
+#volume-steps { display: flex; flex-direction: column-reverse; gap: 2px; width: 34px; height: 148px;
+  border-radius: 20px; overflow: hidden; touch-action: none; cursor: pointer; }
+#volume-steps span { flex: 1; background: rgba(255,255,255,.14); transition: background .15s ease; }
+#volume-steps span.on { background: rgba(255,255,255,.92); }
 #title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 15px; font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
 #view.bar-shown #zh { top: calc(env(safe-area-inset-top) + 72px); }

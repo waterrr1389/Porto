@@ -6,8 +6,10 @@
 // horizontal swipe seeks on release. Subtitle characters sit above the stage,
 // so a press on them never starts a gesture.
 import { HOLD_MS, classifyMove, swipeOffset, type MoveKind } from '../../core/playback.ts';
+import { VOLUME_GAINS, levelAt } from '../../core/volume.ts';
 import type { Dispatch } from '../effects.ts';
 import type { State } from '../state.ts';
+import type { Volume } from '../volume.ts';
 
 export interface PlayerElements {
   view: HTMLElement;
@@ -31,10 +33,13 @@ export interface PlayerElements {
   cueNext: HTMLButtonElement;
   swipePreview: HTMLElement;
   speed: HTMLElement;
+  volumeButton: HTMLButtonElement;
+  volumePopover: HTMLElement;
+  volumeSteps: HTMLElement;
   notice: HTMLElement;
 }
 
-/** The line-step menu folds back after this long without use. */
+/** The line-step menu and the volume steps fold back after this long without use. */
 const CUE_NAV_FOLD_MS = 4000;
 
 const PLAY_ICON =
@@ -53,7 +58,12 @@ interface Press {
   target: number;
 }
 
-export function createPlayerView(els: PlayerElements, dispatch: Dispatch, fullscreenSupported: boolean) {
+export function createPlayerView(
+  els: PlayerElements,
+  dispatch: Dispatch,
+  fullscreenSupported: boolean,
+  volume: Volume,
+) {
   const { video } = els;
   els.fullscreen.hidden = !fullscreenSupported;
 
@@ -176,6 +186,48 @@ export function createPlayerView(els: PlayerElements, dispatch: Dispatch, fullsc
       dispatch({ type: 'cueStepRequested', direction, time: video.currentTime });
     });
   }
+
+  // Volume: one segment per level, set by tapping or dragging along them.
+  const segments = VOLUME_GAINS.map(() => els.volumeSteps.appendChild(document.createElement('span')));
+  const showLevel = () => {
+    const level = volume.level();
+    segments.forEach((segment, index) => segment.classList.toggle('on', index <= level));
+    els.volumeButton.dataset.level = level === 0 ? 'low' : level < VOLUME_GAINS.length / 2 ? 'mid' : 'high';
+  };
+  showLevel();
+  let volumeTimer: ReturnType<typeof setTimeout> | undefined;
+  const keepVolumeOpen = () => {
+    clearTimeout(volumeTimer);
+    volumeTimer = setTimeout(() => (els.volumePopover.hidden = true), CUE_NAV_FOLD_MS);
+  };
+  els.volumeButton.addEventListener('click', () => {
+    els.volumePopover.hidden = !els.volumePopover.hidden;
+    if (els.volumePopover.hidden) return;
+    // Centre the steps under the button, wherever the layout put it.
+    const button = els.volumeButton.getBoundingClientRect();
+    const view = els.view.getBoundingClientRect();
+    els.volumePopover.style.left = `${button.left + button.width / 2 - view.left - els.volumePopover.offsetWidth / 2}px`;
+    keepVolumeOpen();
+  });
+  let adjusting = false;
+  const setFrom = (clientY: number) => {
+    const rect = els.volumeSteps.getBoundingClientRect();
+    const level = levelAt(rect.height > 0 ? (rect.bottom - clientY) / rect.height : 0);
+    if (level !== volume.level()) {
+      volume.setLevel(level);
+      showLevel();
+    }
+    keepVolumeOpen();
+  };
+  els.volumeSteps.addEventListener('pointerdown', (event) => {
+    if (!event.isPrimary) return;
+    adjusting = true;
+    els.volumeSteps.setPointerCapture(event.pointerId);
+    setFrom(event.clientY);
+  });
+  els.volumeSteps.addEventListener('pointermove', (event) => adjusting && setFrom(event.clientY));
+  els.volumeSteps.addEventListener('pointerup', () => (adjusting = false));
+  els.volumeSteps.addEventListener('pointercancel', () => (adjusting = false));
 
   let shownPaused: boolean | null = null;
   const frame = () => {
