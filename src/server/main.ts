@@ -34,7 +34,15 @@ const library = createLibrary(store.config.mediaRoots, {
 });
 const anki = createAnki(store.config.anki);
 const audio = store.config.localAudio === null ? null : createLocalAudio(store.config.localAudio);
-const cards = createMiner({ library, media, anki, audio, store, workDir: join(paths.cache, 'cards') });
+const cards = createMiner({
+  library,
+  media,
+  anki,
+  audio,
+  store,
+  workDir: join(paths.cache, 'cards'),
+  dictionaryStyles: (title) => dictionary.dictionaries().find((info) => info.title === title)?.styles ?? '',
+});
 
 const handler = createHandler({
   dictionary,

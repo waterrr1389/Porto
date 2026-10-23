@@ -31,8 +31,8 @@ const BASE: CardInput = {
   term: '自腹',
   reading: 'じばら',
   definitions: [
-    { dictionary: '明鏡日汉双解辞典', html: '<span>自分で金を払うこと。</span>' },
-    { dictionary: 'Second', html: '<b>other</b>' },
+    { dictionary: '明鏡日汉双解辞典', html: '<span>自分で金を払うこと。</span>', styles: '' },
+    { dictionary: 'Second', html: '<b>other</b>', styles: '' },
   ],
   frequencies: [
     { dictionary: 'JPDB', value: '27394' },
@@ -94,7 +94,7 @@ test('puts only the first dictionary in MainDefinition and all of them in Glossa
 });
 
 test('escapes dictionary names in attributes and text but keeps definition html', () => {
-  const fields = lapisCard(withInput({ definitions: [{ dictionary: 'A&B "x"', html: '<i>raw</i>' }] })).fields;
+  const fields = lapisCard(withInput({ definitions: [{ dictionary: 'A&B "x"', html: '<i>raw</i>', styles: '' }] })).fields;
   assert.equal(
     fields.MainDefinition,
     '<div style="text-align: left;" class="yomitan-glossary"><ol>' +
@@ -237,6 +237,18 @@ test('lists frequencies and sorts by the smallest leading number', () => {
   const none = lapisCard(withInput({ frequencies: [] })).fields;
   assert.equal(none.Frequency, '');
   assert.equal(none.FreqSort, '');
+});
+
+test('keeps several senses inside their dictionary and carries its scoped styles', () => {
+  const html = lapisCard(
+    withInput({
+      definitions: [
+        { dictionary: 'D', html: '<li>one</li><li>two</li>', styles: 'span[data-sc-class="word"] { font-weight: bold; }' },
+      ],
+    }),
+  ).fields.MainDefinition;
+  assert.ok(html?.includes('<li data-dictionary="D"><i>(D)</i> <span><ul><li>one</li><li>two</li></ul></span></li>'), String(html));
+  assert.ok(html?.includes('<style>.yomitan-glossary [data-dictionary="D"] span[data-sc-class="word"]'), String(html));
 });
 
 test('describes the episode in MiscInfo', () => {

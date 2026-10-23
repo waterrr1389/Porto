@@ -4,12 +4,16 @@
 // embeds it and formats the remaining plain-text fields.
 import { stableId } from './library.ts';
 import { cleanTitle } from './library.ts';
+import { scopeCss } from './css.ts';
 
 export interface CardInput {
   term: string;
   reading: string;
-  /** Definition HTML rendered by the client, per dictionary in priority order. */
-  definitions: { dictionary: string; html: string }[];
+  /**
+   * Definition HTML rendered by the client, per dictionary in priority order,
+   * with the dictionary's bundled stylesheet ('' when it has none).
+   */
+  definitions: { dictionary: string; html: string; styles: string }[];
   frequencies: { dictionary: string; value: string }[];
   pitches: number[];
   /** The subtitle cue the word was looked up in. */
@@ -121,17 +125,40 @@ function furigana(term: string, reading: string): string {
   return reading !== '' && reading !== term ? `${term}[${reading}]` : term;
 }
 
-/** One `<li>` per dictionary, keeping the HTML the client rendered. */
+/**
+ * One `<li>` per dictionary, keeping the HTML the client rendered, in the shape
+ * Yomitan writes to Anki: each dictionary's stylesheet follows, scoped to its
+ * own item, so the note keeps the dictionary's look in Anki.
+ */
 function definitionList(definitions: CardInput['definitions']): string {
   if (definitions.length === 0) return '';
   const items = definitions
     .map(
       (definition) =>
         `<li data-dictionary="${escapeAttribute(definition.dictionary)}">` +
-        `<i>(${escapeText(definition.dictionary)})</i> <span>${definition.html}</span></li>`,
+        `<i>(${escapeText(definition.dictionary)})</i> <span>${glossaryBody(definition.html)}</span></li>`,
     )
     .join('');
-  return `<div style="text-align: left;" class="yomitan-glossary"><ol>${items}</ol></div>`;
+  const styles = definitions
+    .filter((definition) => definition.styles.trim() !== '')
+    .map((definition) =>
+      scopeCss(definition.styles, `.yomitan-glossary [data-dictionary="${cssString(definition.dictionary)}"]`),
+    )
+    .join('');
+  const style = styles === '' ? '' : `<style>${styles}</style>`;
+  return `<div style="text-align: left;" class="yomitan-glossary"><ol>${items}</ol>${style}</div>`;
+}
+
+/**
+ * Several senses arrive as bare `<li>` items; inside the dictionary's own `<li>`
+ * they would close it early, so they get a list of their own.
+ */
+function glossaryBody(html: string): string {
+  return /^\s*<li[\s>]/i.test(html) ? `<ul>${html}</ul>` : html;
+}
+
+function cssString(text: string): string {
+  return text.replace(/["\\]/g, (char) => `\\${char}`);
 }
 
 /**

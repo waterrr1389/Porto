@@ -22,6 +22,8 @@ export interface MinerOptions {
   store: Store;
   /** Parent directory for per-card temporary media, e.g. cache/cards. */
   workDir: string;
+  /** A dictionary's bundled stylesheet, copied into the note; '' when it has none. */
+  dictionaryStyles?: (dictionary: string) => string;
 }
 
 export interface Miner {
@@ -74,7 +76,10 @@ export function createMiner(options: MinerOptions): Miner {
       const plan = lapisCard({
         term: request.term,
         reading: request.reading,
-        definitions: request.definitions,
+        definitions: request.definitions.map((definition) => ({
+          ...definition,
+          styles: options.dictionaryStyles?.(definition.dictionary) ?? '',
+        })),
         frequencies: request.frequencies,
         pitches: request.pitches,
         cue: request.cue,
