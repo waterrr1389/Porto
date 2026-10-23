@@ -1,7 +1,9 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: #000; color: #fff;
   font-family: -apple-system, "Hiragino Sans", "PingFang SC", sans-serif; }
-#stage { position: relative; width: 100%; height: 100dvh; background: #000;
+/* The system blurs the status bar and a band below it; text and controls start under that band. */
+#stage { --top-clear: calc(env(safe-area-inset-top) + 20px);
+  position: relative; width: 100%; height: 100dvh; background: #000;
   overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   --panel-w: 0px; --panel-h: 0px; }
 #stage.panel-open.landscape { --panel-w: min(40%, 520px); }
@@ -29,10 +31,9 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: con
 #panel { position: absolute; background: #1c1c20; color: #e8e8ea; overflow: hidden;
   display: flex; flex-direction: column; transition: transform .25s ease;
   -webkit-user-select: text; user-select: text; }
-/* The home-screen app draws a translucent status bar over the page; keep the panel head below it. */
+/* Keep the panel head clear of the notch and of the status bar when the page runs fullscreen. */
 #stage.landscape #panel { top: 0; right: 0; bottom: 0; width: min(40%, 520px);
-  /* iPadOS fades content for a while below the status bar, beyond the safe area itself. */
-  padding-top: calc(env(safe-area-inset-top) + 20px);
+  padding-top: var(--top-clear);
   border-left: 1px solid #333; transform: translateX(100%); }
 #stage.portrait #panel { left: 0; right: 0; bottom: 0; height: 55%;
   border-top: 1px solid #333; border-radius: 14px 14px 0 0; transform: translateY(100%); }
@@ -72,15 +73,16 @@ details.dict[open] > summary::before { content: '▾ '; }
 #library-screen { position: absolute; inset: 0; z-index: 2; overflow-y: auto; overflow-x: hidden;
   overscroll-behavior-x: none;
   -webkit-overflow-scrolling: touch; background: #0b0b0d; color: #f5f5f7; }
-.lib-heading { margin: 0; padding: calc(env(safe-area-inset-top) + 20px)
+.lib-heading { margin: 0; padding: var(--top-clear)
     max(24px, env(safe-area-inset-right)) 16px max(24px, env(safe-area-inset-left));
   font-size: clamp(28px, 4vw, 40px); font-weight: 800; letter-spacing: -.01em; }
-.lib-hero { position: relative; height: clamp(220px, 42vh, 460px); overflow: hidden;
+.lib-hero { position: relative; display: flex; flex-direction: column; justify-content: flex-end;
+  min-height: clamp(220px, 42vh, 460px); padding-top: calc(var(--top-clear) + 12px); overflow: hidden;
   background-color: #15151a; background-size: cover; background-position: center; }
 .lib-hero::after { content: ''; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(to bottom, rgba(11,11,13,0) 40%, #0b0b0d 100%),
     linear-gradient(90deg, rgba(0,0,0,.62) 0%, rgba(0,0,0,0) 62%); }
-.hero-content { position: absolute; left: 0; right: 0; bottom: 0; z-index: 1;
+.hero-content { position: relative; z-index: 1;
   display: flex; flex-direction: column; align-items: flex-start;
   padding: 0 max(24px, env(safe-area-inset-right)) 22px max(24px, env(safe-area-inset-left)); }
 .hero-eyebrow { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .14em;
@@ -131,7 +133,7 @@ details.dict[open] > summary::before { content: '▾ '; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ep-meta { display: block; margin: 0 2px; font-size: 12px; color: rgba(255,255,255,.5);
   font-variant-numeric: tabular-nums; min-height: 1em; }
-.lib-empty { color: rgba(255,255,255,.5); padding: calc(env(safe-area-inset-top) + 40px) 24px;
+.lib-empty { color: rgba(255,255,255,.5); padding: calc(var(--top-clear) + 20px) 24px;
   text-align: center; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -150,7 +152,7 @@ details.dict[open] > summary::before { content: '▾ '; }
 button svg { display: block; pointer-events: none; }
 
 #top-bar { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px;
-  padding: calc(env(safe-area-inset-top) + 12px) max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left)); }
+  padding: var(--top-clear) max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left)); }
 #top-bar button { min-width: 44px; min-height: 44px; padding: 0 16px; border-radius: 22px;
   font: inherit; font-size: 15px; white-space: nowrap; }
 #top-bar button[hidden] { display: none; }
@@ -161,7 +163,7 @@ button svg { display: block; pointer-events: none; }
 
 /* Volume: a slim capsule under its button that fills from the bottom, with
    hairline gaps marking the levels, like the system volume control. */
-#volume { position: absolute; top: calc(env(safe-area-inset-top) + 66px);
+#volume { position: absolute; top: calc(var(--top-clear) + 58px);
   padding: 6px; border-radius: 26px; border: 1px solid rgba(255,255,255,.14);
   background: rgba(40,40,44,.45); -webkit-backdrop-filter: blur(24px) saturate(170%); backdrop-filter: blur(24px) saturate(170%);
   box-shadow: 0 10px 30px rgba(0,0,0,.35); }
@@ -172,7 +174,7 @@ button svg { display: block; pointer-events: none; }
 #volume-steps span.on { background: rgba(255,255,255,.92); }
 
 /* Subtitle menu: the same glass capsule, wide enough for both slots. */
-#subtitles { position: absolute; top: calc(env(safe-area-inset-top) + 66px);
+#subtitles { position: absolute; top: calc(var(--top-clear) + 58px);
   width: min(320px, calc(100vw - 24px)); padding: 6px; border-radius: 18px;
   border: 1px solid rgba(255,255,255,.14); background: rgba(40,40,44,.55);
   -webkit-backdrop-filter: blur(24px) saturate(170%); backdrop-filter: blur(24px) saturate(170%);
@@ -191,7 +193,7 @@ button svg { display: block; pointer-events: none; }
 .subtitle-check { width: 16px; text-align: center; color: #fff; }
 #title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 15px; font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
-#view.bar-shown #zh { top: calc(env(safe-area-inset-top) + 72px); }
+#view.bar-shown #zh { top: calc(var(--top-clear) + 64px); }
 #zh { transition: top .2s; }
 
 #play { position: absolute; left: 50%; top: 50%; width: 76px; height: 76px; margin: -38px 0 0 -38px;
@@ -253,6 +255,6 @@ button svg { display: block; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
   .chrome, #cue-nav .step, #speed, #swipe-preview, #track .rail { transition: none; }
 }
-#notice { position: absolute; top: calc(env(safe-area-inset-top) + 66px); left: max(16px, env(safe-area-inset-left)); font-size: 12px; color: #8f8; pointer-events: none;
+#notice { position: absolute; top: calc(var(--top-clear) + 58px); left: max(16px, env(safe-area-inset-left)); font-size: 12px; color: #8f8; pointer-events: none;
   z-index: 3; }
 
