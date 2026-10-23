@@ -121,6 +121,10 @@ export function createEffectRunner({ video, stage }: EffectTargets, dispatch: Di
         video.currentTime = effect.time;
         return;
 
+      case 'setPlaybackRate':
+        video.playbackRate = effect.rate;
+        return;
+
       case 'reloadVideo': {
         const position = video.currentTime;
         video.addEventListener('loadedmetadata', () => (video.currentTime = position), { once: true });

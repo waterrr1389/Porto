@@ -84,6 +84,34 @@ test('seeking is an effect and shows the controls', () => {
   assert.equal(step.state.controlsShown, true);
 });
 
+test('stepping between lines seeks to the line start', () => {
+  const withCues = reduce(playing, {
+    type: 'subtitlesLoaded',
+    track: 'ja',
+    cues: [
+      { id: 0, start: 10, end: 12, text: 'a' },
+      { id: 1, start: 20, end: 22, text: 'b' },
+    ],
+  }).state;
+  const next = reduce(withCues, { type: 'cueStepRequested', direction: 1, time: 11 });
+  assert.deepEqual(next.effects[0], { type: 'seek', time: 20 });
+  const past = reduce(withCues, { type: 'cueStepRequested', direction: 1, time: 25 });
+  assert.equal(past.effects.some((e) => e.type === 'seek'), false);
+});
+
+test('holding speeds up playback only while playing', () => {
+  const held = reduce(playing, { type: 'holdStarted' });
+  assert.equal(held.state.fastForward, true);
+  assert.deepEqual(held.effects, [{ type: 'setPlaybackRate', rate: 2 }]);
+  const released = reduce(held.state, { type: 'holdEnded' });
+  assert.equal(released.state.fastForward, false);
+  assert.deepEqual(released.effects, [{ type: 'setPlaybackRate', rate: 1 }]);
+
+  const paused = run(playing, { type: 'playToggled' }, { type: 'videoPaused' }).state;
+  assert.equal(reduce(paused, { type: 'holdStarted' }).state.fastForward, false);
+  assert.deepEqual(reduce(paused, { type: 'holdEnded' }).effects, []);
+});
+
 test('a media error reloads and resumes only if playing before', () => {
   const failed = run(playing, { type: 'videoErrored', code: 2 });
   assert.ok(failed.effects.some((e) => e.type === 'reloadVideo'));
@@ -350,7 +378,16 @@ const library: LibraryResponse = {
     {
       id: 's1',
       title: 'Show',
-      episodes: [{ id: 'e1', title: '第1话', languages: ['ja'], position: 42, duration: 1400, thumbnail: '/api/episodes/e1/thumbnail' }],
+      episodes: [
+        {
+          id: 'e1',
+          title: '第1话',
+          languages: ['ja'],
+          position: 42,
+          duration: 1400,
+          thumbnail: '/api/episodes/e1/thumbnail',
+        },
+      ],
     },
   ],
   resume: { episodeId: 'e1', seriesTitle: 'Show', episodeTitle: '第1话', position: 42 },

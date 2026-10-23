@@ -17,13 +17,24 @@
     <div id="tap"></div>
     <div id="zh" class="subs"></div>
     <div id="ja" class="subs"></div>
-    <div id="bar">
-      <button id="library">‹ 列表</button>
-      <button id="play">▶</button>
-      <input id="seek" type="range" min="0" value="0">
-      <span id="time">0:00 / 0:00</span>
-      <button id="next" hidden>下一集 ›</button>
-      <button id="fullscreen">⛶</button>
+    <div id="shade" class="chrome"></div>
+    <div id="top-bar" class="chrome">
+      <button id="library" aria-label="列表"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg><span class="label">列表</span></button>
+      <span id="title"></span>
+      <button id="next" aria-label="下一集" hidden><span class="label">下一集</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
+      <button id="fullscreen" aria-label="全屏"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    </div>
+    <button id="play" class="chrome" aria-label="播放"></button>
+    <div id="cue-nav" class="chrome" hidden>
+      <button id="cue-prev" class="step"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>上一句</button>
+      <button id="cue-toggle" aria-label="字幕跳转"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/></svg></button>
+      <button id="cue-next" class="step">下一句<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+    <div id="swipe-preview"></div>
+    <div id="speed"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M3 6l9 6-9 6zM12 6l9 6-9 6z"/></svg>2×</div>
+    <div id="bar" class="chrome">
+      <div id="track"><div class="rail"><div id="buffered"></div><div id="played"></div></div><div id="scrub-tip"></div></div>
+      <div id="times"><span id="elapsed">0:00</span><span id="remaining">-0:00</span></div>
     </div>
   </div>
   <div id="library-screen" hidden></div>

@@ -4,6 +4,7 @@
 //
 // The <video> element owns currentTime, paused and buffering; State keeps only
 // user intent and discrete values derived from the element's events.
+import { HOLD_RATE, cueStepTarget } from '../core/playback.ts';
 import type { Cue } from '../core/subtitles.ts';
 import { highlightRange, scanText } from '../core/scan.ts';
 import {
@@ -103,6 +104,8 @@ export interface State {
   /** True from a reload until the element has metadata again. */
   reloading: boolean;
   controlsShown: boolean;
+  /** True while the stage is held to play faster. */
+  fastForward: boolean;
   /** Short status line, e.g. a media error; null hides it. */
   notice: string | null;
   lookup: LookupState;
@@ -138,6 +141,10 @@ export type Action =
   | { type: 'stageTapped' }
   | { type: 'playToggled' }
   | { type: 'seekRequested'; time: number }
+  /** Jump to the previous or next Japanese line from playback time `time`. */
+  | { type: 'cueStepRequested'; direction: -1 | 1; time: number }
+  | { type: 'holdStarted' }
+  | { type: 'holdEnded' }
   | { type: 'fullscreenToggled' }
   | { type: 'videoPlayed' }
   | { type: 'videoPaused' }
@@ -163,6 +170,7 @@ export type Effect =
   | { type: 'play' }
   | { type: 'pause' }
   | { type: 'seek'; time: number }
+  | { type: 'setPlaybackRate'; rate: number }
   /** Reload the source keeping the element's current position. */
   | { type: 'reloadVideo' }
   /** Report the element's readyState as `stallChecked`. */
@@ -201,6 +209,7 @@ export const initialState: State = {
   wantsPlay: false,
   reloading: false,
   controlsShown: true,
+  fastForward: false,
   notice: null,
   lookup: {
     seq: 0,
@@ -424,6 +433,22 @@ export function reduce(state: State, action: Action): Step {
       const shown = showControls(state);
       return { state: shown.state, effects: [{ type: 'seek', time: action.time }, ...shown.effects] };
     }
+
+    case 'cueStepRequested': {
+      const target = cueStepTarget(state.cues.ja, action.time, action.direction);
+      const shown = showControls(state);
+      if (target === null) return shown;
+      return { state: shown.state, effects: [{ type: 'seek', time: target }, ...shown.effects] };
+    }
+
+    case 'holdStarted':
+      // Holding a paused picture or behind the open panel does nothing.
+      if (!state.wantsPlay || state.lookup.panelOpen || state.fastForward) return only(state);
+      return { state: { ...state, fastForward: true }, effects: [{ type: 'setPlaybackRate', rate: HOLD_RATE }] };
+
+    case 'holdEnded':
+      if (!state.fastForward) return only(state);
+      return { state: { ...state, fastForward: false }, effects: [{ type: 'setPlaybackRate', rate: 1 }] };
 
     case 'fullscreenToggled':
       return { state, effects: [{ type: 'toggleFullscreen' }] };
