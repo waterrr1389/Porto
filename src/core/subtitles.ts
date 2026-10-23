@@ -94,7 +94,9 @@ export function parseAss(source: string, options: AssOptions = {}): Cue[] {
 
 /**
  * Parses SRT blocks. The numeric index line is optional, as are the usual
- * `<i>`/`<font>` tags around the text.
+ * `<i>`/`<font>` tags around the text. ASS override blocks such as `{\an8}`,
+ * which some releases put into SRT for positioning, are dropped: the player
+ * places every line itself.
  */
 export function parseSrt(source: string): Cue[] {
   const lines = normalizeSource(source).split('\n');
@@ -110,7 +112,7 @@ export function parseSrt(source: string): Cue[] {
       if (timing !== null) {
         const text = block
           .slice(timingIndex + 1)
-          .map((line) => line.replace(/<[^>]*>/g, '').trim())
+          .map((line) => line.replace(/<[^>]*>|\{\\[^}]*\}/g, '').trim())
           .filter((line) => line.length > 0)
           .join('\n');
         if (text !== '') {

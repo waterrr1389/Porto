@@ -209,6 +209,12 @@ test('parseSrt merges blocks that share a time span and skips empty text', () =>
   assert.deepEqual(parseSrt(source), [{ id: 0, start: 1, end: 3, text: 'one\ntwo' }]);
 });
 
+test('parseSrt drops ASS override blocks used for positioning', () => {
+  const source = '1\n00:00:01,000 --> 00:00:02,000\n{\\an8}パンケーキ\n';
+
+  assert.deepEqual(parseSrt(source), [{ id: 0, start: 1, end: 2, text: 'パンケーキ' }]);
+});
+
 test('parseSrt handles a BOM and CRLF line endings', () => {
   const source = '\ufeff1\r\n00:00:01,000 --> 00:00:02,000\r\nline\r\n';
 
