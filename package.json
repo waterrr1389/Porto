@@ -11,6 +11,7 @@
     "build:yomitan": "node scripts/build-yomitan-libs.ts",
     "start": "node src/server/main.ts",
     "import-dicts": "node scripts/import-dicts.ts",
+    "import-yomitan": "node scripts/import-yomitan.ts",
     "build": "node scripts/build-client.ts"
   },
   "devDependencies": {

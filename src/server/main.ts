@@ -14,7 +14,9 @@ import { paths } from './paths.ts';
 const port = Number(process.env.PORT ?? 8090);
 
 const store = openStore(paths.state);
-const dictionary = await openDictionary(paths.dictionaryDatabase);
+const dictionary = await openDictionary(paths.dictionaryDatabase, {
+  dictionaryOrder: store.config.dictionaryOrder,
+});
 const titles = dictionary.dictionaries().map((d) => d.title);
 console.log(titles.length > 0 ? `dictionaries: ${titles.join(', ')}` : 'no dictionaries; run `npm run import-dicts`');
 

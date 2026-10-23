@@ -1,18 +1,30 @@
 // Dictionary lookups with Yomitan's importer and translator, unmodified, over
 // a SQLite store. Importing is a separate, explicit step (`npm run
-// import-dicts`) because it takes seconds per dictionary; opening only reads.
+// import-dicts` for zips, `npm run import-yomitan` for an exported
+// collection) because it takes seconds per dictionary; opening only reads.
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
+import { orderByPriority } from '../../../core/dictionary-order.ts';
 import type { DictionaryInfo, Glossary, LookupResponse, TermEntry } from '../../../shared/api.ts';
 import { SqliteDictionaryDatabase } from './database.ts';
 import { registerYomitanLibs, yomitanDir } from './yomitan-libs.ts';
+
+export { importYomitanBackup } from './backup.ts';
+export type {
+  BackupDictionaryResult,
+  BackupImportResult,
+  BackupProgress,
+  YomitanBackupOptions,
+} from './backup.ts';
 
 export interface Dictionary {
   /** Imported dictionaries in priority order: the first is the main dictionary. */
   dictionaries(): DictionaryInfo[];
   /** Longest-match lookup with deinflection, from the start of `text`. */
   lookup(text: string): Promise<LookupResponse>;
+  /** A file bundled with a dictionary (images its definitions show), or null when there is none. */
+  media(dictionary: string, path: string): { mediaType: string; content: Uint8Array } | null;
   close(): void;
 }
 
@@ -25,14 +37,24 @@ export interface ImportResult {
   seconds: number;
 }
 
+export interface DictionaryOptions {
+  /** Dictionary titles to show and consult first, in this order. */
+  dictionaryOrder?: readonly string[];
+}
+
 /** Opens the database at `databasePath`, creating an empty one if needed. */
-export async function openDictionary(databasePath: string): Promise<Dictionary> {
+export async function openDictionary(databasePath: string, options: DictionaryOptions = {}): Promise<Dictionary> {
   const yomitan = await loadYomitan();
   const db = new SqliteDictionaryDatabase(databasePath);
-  const infos = await db.getDictionaryInfo();
+  const priority = options.dictionaryOrder ?? [];
+  const infos = orderByPriority(
+    await db.getDictionaryInfo(),
+    (info) => String(info.title),
+    priority,
+  );
   const translator = new yomitan.Translator(db);
   translator.prepare();
-  const options = findTermsOptions(infos.map((info) => String(info.title)));
+  const findOptions = findTermsOptions(infos.map((info) => String(info.title)));
   const dictionaries = infos.map((info) => ({
     title: String(info.title),
     styles: typeof info.styles === 'string' ? info.styles : '',
@@ -41,9 +63,13 @@ export async function openDictionary(databasePath: string): Promise<Dictionary> 
   return {
     dictionaries: () => dictionaries,
     async lookup(text) {
-      const { dictionaryEntries, originalTextLength } = await translator.findTerms('group', text, options);
-      return { matchLength: originalTextLength, entries: dictionaryEntries.map(toTermEntry) };
+      const { dictionaryEntries, originalTextLength } = await translator.findTerms('group', text, findOptions);
+      return {
+        matchLength: originalTextLength,
+        entries: dictionaryEntries.map((entry) => toTermEntry(entry, priority)),
+      };
     },
+    media: (dictionary, path) => db.getMedia(dictionary, path),
     close: () => db.close(),
   };
 }
@@ -85,8 +111,19 @@ export async function importDictionaries(databasePath: string, files: string[]):
 interface YomitanEntry {
   headwords: { term: string; reading: string }[];
   inflectionRuleChainCandidates?: { inflectionRules: { name: string }[] }[];
-  frequencies?: { dictionary: string; dictionaryAlias?: string; frequency: number; displayValue: string | null }[];
-  pronunciations?: { pronunciations: { type: string; positions?: unknown }[] }[];
+  frequencies?: {
+    dictionary: string;
+    dictionaryAlias?: string;
+    frequency: number;
+    displayValue: string | null;
+    headwordIndex?: number;
+  }[];
+  pronunciations?: {
+    dictionary: string;
+    dictionaryAlias?: string;
+    headwordIndex?: number;
+    pronunciations: { type: string; positions?: unknown }[];
+  }[];
   definitions: { dictionary: string; entries: unknown[] }[];
 }
 
@@ -157,7 +194,22 @@ function findTermsOptions(titles: string[]): object {
   };
 }
 
-function toTermEntry(entry: YomitanEntry): TermEntry {
+function toTermEntry(entry: YomitanEntry, priority: readonly string[]): TermEntry {
+  const frequencies = orderByPriority(frequencyEntries(entry), (frequency) => frequency.dictionary, priority);
+  const pitchAccents = orderByPriority(pitchAccentEntries(entry), (accent) => accent.dictionary, priority);
+  const definitions = orderByPriority(definitionGroups(entry), (group) => group.dictionary, priority);
+
+  return {
+    headwords: entry.headwords.map(({ term, reading }) => ({ term, reading })),
+    inflections: entry.inflectionRuleChainCandidates?.[0]?.inflectionRules.map((rule) => rule.name) ?? [],
+    frequencies,
+    pitches: pitchAccents.flatMap((accent) => accent.positions),
+    pitchAccents,
+    definitions,
+  };
+}
+
+function definitionGroups(entry: YomitanEntry): TermEntry['definitions'] {
   const definitions: TermEntry['definitions'] = [];
   for (const definition of entry.definitions) {
     let group = definitions.find((d) => d.dictionary === definition.dictionary);
@@ -170,22 +222,46 @@ function toTermEntry(entry: YomitanEntry): TermEntry {
       if (glossary) group.glossary.push(glossary);
     }
   }
-  const pitches: number[] = [];
+  return definitions;
+}
+
+/**
+ * One frequency per dictionary and reading, in Yomitan's order. The value is
+ * the display string Yomitan shows, falling back to the plain number.
+ */
+function frequencyEntries(entry: YomitanEntry): TermEntry['frequencies'] {
+  const seen = new Set<string>();
+  const frequencies: TermEntry['frequencies'] = [];
+  for (const frequency of entry.frequencies ?? []) {
+    const dictionary = frequency.dictionaryAlias ?? frequency.dictionary;
+    const reading = entry.headwords[frequency.headwordIndex ?? -1]?.reading ?? '';
+    const key = `${dictionary}\0${reading}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    frequencies.push({ dictionary, value: frequency.displayValue ?? String(frequency.frequency) });
+  }
+  return frequencies;
+}
+
+/** Pitch positions per dictionary and reading, deduplicated and in Yomitan's order. */
+function pitchAccentEntries(entry: YomitanEntry): TermEntry['pitchAccents'] {
+  const accents = new Map<string, TermEntry['pitchAccents'][number]>();
   for (const group of entry.pronunciations ?? []) {
-    for (const p of group.pronunciations) {
-      if (p.type === 'pitch-accent' && typeof p.positions === 'number') pitches.push(p.positions);
+    const headword = entry.headwords[group.headwordIndex ?? -1];
+    if (headword === undefined) continue;
+    const dictionary = group.dictionaryAlias ?? group.dictionary;
+    for (const pronunciation of group.pronunciations) {
+      if (pronunciation.type !== 'pitch-accent' || typeof pronunciation.positions !== 'number') continue;
+      const key = `${dictionary}\0${headword.reading}`;
+      let accent = accents.get(key);
+      if (accent === undefined) {
+        accent = { dictionary, reading: headword.reading, positions: [] };
+        accents.set(key, accent);
+      }
+      if (!accent.positions.includes(pronunciation.positions)) accent.positions.push(pronunciation.positions);
     }
   }
-  return {
-    headwords: entry.headwords.map(({ term, reading }) => ({ term, reading })),
-    inflections: entry.inflectionRuleChainCandidates?.[0]?.inflectionRules.map((rule) => rule.name) ?? [],
-    frequencies: (entry.frequencies ?? []).map((f) => ({
-      dictionary: f.dictionaryAlias ?? f.dictionary,
-      value: f.displayValue ?? String(f.frequency),
-    })),
-    pitches,
-    definitions,
-  };
+  return [...accents.values()];
 }
 
 /** Text and structured content are kept; images and deinflection glossaries are dropped. */

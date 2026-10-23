@@ -61,7 +61,7 @@ depend on each other only through this file.
 | `mining.ts` | Creating a card: captures media, checks duplicates and adds the note through the adapters, using `core/card`. |
 | `adapters/library` | Scans the media roots, keeps the episode index (via `core/library`). |
 | `adapters/media` | ffmpeg: whole-episode remux into `cache/` on first request, screenshots, audio clips, embedded subtitle extraction; LRU cache. |
-| `adapters/dictionary` | Yomitan importer and translator over a SQLite store. |
+| `adapters/dictionary` | Yomitan importer and translator over a SQLite store; imports dictionary zips or a streamed "Export Dictionary Collection" backup. |
 | `adapters/anki` | AnkiConnect calls: store media (by file path, same machine), add notes, find existing notes. |
 | `adapters/local-audio` | The "Local Audio Server for Yomichan" add-on: word recordings by term and reading, and file bytes for the proxy. |
 | `adapters/store` | Durable user state under `state/`: config, playback positions, subtitle choices, mined-card history. |
@@ -125,8 +125,9 @@ forbids, so `scripts/build-yomitan-libs` bundles only the libraries we use
 (zip.js, schema validators, kanji processor) from pinned npm packages into the
 git-ignored `vendor-build/`. Yomitan is JavaScript; `adapters/dictionary`
 declares minimal types for the parts it exposes, and tsc never checks
-`vendor/`. Dictionaries are imported by an explicit `npm run import-dicts`,
-not on server start.
+`vendor/`. Dictionaries are imported by an explicit `npm run import-dicts`
+(zips) or `npm run import-yomitan` (an exported collection), not on server
+start.
 
 **Playback: whole-episode remux into a cached MP4, served with HTTP ranges.**
 Safari cannot open MKV, so each episode is remuxed once into an MP4 under

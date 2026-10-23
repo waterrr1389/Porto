@@ -68,7 +68,7 @@ export class SqliteDictionaryDatabase {
   private insert(store: string, row: Row): number {
     const columns = columnsOf(store);
     const sql = `INSERT INTO ${store} (${columns.join(', ')}, json) VALUES (${columns.map(() => '?').join(', ')}, ?)`;
-    const { lastInsertRowid } = this.statement(sql).run(...columns.map((c) => columnValue(row[c])), JSON.stringify(row));
+    const { lastInsertRowid } = this.statement(sql).run(...columns.map((c) => columnValue(row[c])), serializeRow(row));
     return Number(lastInsertRowid);
   }
 
@@ -106,11 +106,23 @@ export class SqliteDictionaryDatabase {
     const columns = columnsOf(store);
     const sql = `UPDATE ${store} SET ${columns.map((c) => `${c} = ?`).join(', ')}, json = ? WHERE id = ?`;
     for (const { data, primaryKey } of items.slice(start, start + count)) {
-      this.statement(sql).run(...columns.map((c) => columnValue(data[c])), JSON.stringify(data), primaryKey);
+      this.statement(sql).run(...columns.map((c) => columnValue(data[c])), serializeRow(data), primaryKey);
     }
   }
 
   // Translator-facing API
+
+  /** A media file bundled with a dictionary, such as an icon its definitions show. */
+  getMedia(dictionary: string, path: string): { mediaType: string; content: Uint8Array } | null {
+    const found = this.statement('SELECT json FROM media WHERE dictionary = ? AND path = ? LIMIT 1').get(dictionary, path) as
+      | { json: string }
+      | undefined;
+    if (!found) return null;
+    const row = JSON.parse(found.json) as { mediaType?: unknown; content?: unknown };
+    if (typeof row.content !== 'string') return null;
+    const mediaType = typeof row.mediaType === 'string' ? row.mediaType : 'application/octet-stream';
+    return { mediaType, content: new Uint8Array(Buffer.from(row.content, 'base64')) };
+  }
 
   async getDictionaryInfo(): Promise<Row[]> {
     return this.statement('SELECT json FROM dictionaries ORDER BY id')
@@ -228,4 +240,13 @@ function createTerm(matchSource: string, matchType: string, row: Row, index: num
     id: row.id,
     sequence: typeof row.sequence === 'number' ? row.sequence : -1,
   };
+}
+
+/** Media rows carry bytes; the row itself is stored as JSON, so bytes become base64. */
+function serializeRow(row: Row): string {
+  return JSON.stringify(row, (_key, value: unknown) => {
+    if (value instanceof Uint8Array) return Buffer.from(value).toString('base64');
+    if (value instanceof ArrayBuffer) return Buffer.from(new Uint8Array(value)).toString('base64');
+    return value;
+  });
 }

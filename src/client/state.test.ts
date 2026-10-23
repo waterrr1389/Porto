@@ -611,6 +611,7 @@ const termEntry: TermEntry = {
   inflections: ['-た'],
   frequencies: [{ dictionary: 'JPDB', value: '900' }],
   pitches: [1],
+  pitchAccents: [{ dictionary: 'アクセント辞典', reading: 'にほんご', positions: [0] }],
   definitions: [{ dictionary: '大辞泉', glossary: [{ type: 'text', text: 'Japanese language' }] }],
 };
 const secondTermEntry: TermEntry = {

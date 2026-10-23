@@ -18,6 +18,8 @@ export interface Config {
   anki: AnkiConfig;
   /** Word audio server, or null to disable word audio. */
   localAudio: LocalAudioConfig | null;
+  /** Dictionary titles to use first, in this order; others follow import order. */
+  dictionaryOrder: string[];
 }
 
 export interface LocalAudioConfig {
@@ -73,6 +75,7 @@ export const DEFAULT_CONFIG: Config = {
   cacheLimitGB: 20,
   anki: { url: 'http://127.0.0.1:8765', apiKey: null, deck: 'Mining', model: 'Lapis' },
   localAudio: { url: 'http://127.0.0.1:5050' },
+  dictionaryOrder: [],
 };
 
 /**
@@ -94,6 +97,7 @@ export function openStore(dir: string): Store {
     // A stored null disables word audio; a missing key takes the default.
     localAudio:
       storedConfig?.localAudio === undefined ? DEFAULT_CONFIG.localAudio : storedConfig.localAudio,
+    dictionaryOrder: storedConfig?.dictionaryOrder ?? DEFAULT_CONFIG.dictionaryOrder,
   };
 
   const positions = new Map(Object.entries(readJson<Record<string, Progress>>(progressPath) ?? {}));

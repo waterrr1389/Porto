@@ -38,6 +38,8 @@ import { AnkiFailure, EpisodeNotFound } from './mining.ts';
 export interface DictionaryService {
   dictionaries(): DictionariesResponse;
   lookup(text: string): Promise<LookupResponse>;
+  /** A file bundled with a dictionary, served to Yomitan's renderer for images in definitions. */
+  media(dictionary: string, path: string): { mediaType: string; content: Uint8Array } | null;
 }
 
 export interface EpisodeSource extends LibraryEpisode {
@@ -243,6 +245,19 @@ async function route(services: HttpServices, req: IncomingMessage, res: ServerRe
       return sendJson<LibraryResponse>(res, 200, await describeLibrary(services));
     case '/api/dictionaries':
       return sendJson<DictionariesResponse>(res, 200, services.dictionary.dictionaries());
+    case '/api/dictionaries/media': {
+      const dictionary = url.searchParams.get('dictionary') ?? '';
+      const mediaPath = url.searchParams.get('path') ?? '';
+      if (dictionary === '' || mediaPath === '') throw new HttpError(400, 'dictionary and path are required');
+      const media = services.dictionary.media(dictionary, mediaPath);
+      if (media === null) throw new HttpError(404, 'no such media');
+      res.writeHead(200, {
+        'Content-Type': media.mediaType,
+        'Content-Length': media.content.byteLength,
+        'Cache-Control': 'max-age=86400',
+      });
+      return void res.end(media.content);
+    }
     case '/api/lookup': {
       const text = url.searchParams.get('text') ?? '';
       if (text === '' || text.length > MAX_LOOKUP_LENGTH) {

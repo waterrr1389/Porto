@@ -174,6 +174,8 @@ export interface TermEntry {
   frequencies: { dictionary: string; value: string }[];
   /** Downstep positions from pitch-accent dictionaries. */
   pitches: number[];
+  /** The same pitch data per dictionary and reading, for display, in dictionary priority order. */
+  pitchAccents: { dictionary: string; reading: string; positions: number[] }[];
   /** Definitions grouped by dictionary, in dictionary priority order. */
   definitions: { dictionary: string; glossary: Glossary[] }[];
 }

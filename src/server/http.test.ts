@@ -81,6 +81,10 @@ const dictionary: DictionaryService = {
     if (text === 'boom') throw new Error('broken');
     return { matchLength: 2, entries: [] };
   },
+  media: (dict, path) =>
+    dict === 'Fixture' && path === 'icons/note.svg'
+      ? { mediaType: 'image/svg+xml', content: new TextEncoder().encode('<svg/>') }
+      : null,
 };
 
 before(async () => {
@@ -317,6 +321,15 @@ test('serves index.html at the root', async () => {
 
 test('lists dictionaries', async () => {
   assert.deepEqual(await getJson('/api/dictionaries'), [{ title: 'Fixture', styles: '.x{}' }]);
+});
+
+test('serves media bundled with a dictionary', async () => {
+  const res = await fetch(`${base}/api/dictionaries/media?dictionary=Fixture&path=${encodeURIComponent('icons/note.svg')}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/svg+xml');
+  assert.equal(await res.text(), '<svg/>');
+  assert.equal((await fetch(`${base}/api/dictionaries/media?dictionary=Fixture&path=missing.svg`)).status, 404);
+  assert.equal((await fetch(`${base}/api/dictionaries/media?dictionary=Fixture`)).status, 400);
 });
 
 test('looks up text and validates its length', async () => {
