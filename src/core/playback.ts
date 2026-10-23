@@ -9,24 +9,33 @@ export const HOLD_RATE = 2;
 
 /** Movement below this many pixels still counts as a tap or a hold. */
 const SLOP_PX = 10;
-/** Within this many seconds of a line's start, "previous" skips to the line before it. */
-const RESTART_WINDOW_S = 1;
-/** Keeps "next" from landing on the line the playhead has just been put on. */
+/** Keeps a step from landing on the line the playhead is already on. */
 const EPSILON_S = 0.05;
 
 /**
- * Start time of the line to jump to, or null when there is none. Backwards
- * restarts the current line unless it started less than a second ago, the way
- * a "previous track" button does; `cues` must be sorted by start.
+ * Start time of the line to jump to, or null when there is none. Forward goes
+ * to the next line that starts after `time`. Backward goes to the line before
+ * the one on screen; with no line on screen (a gap), it replays the line that
+ * started last. `cues` must be sorted by start.
  */
 export function cueStepTarget(cues: readonly Cue[], time: number, direction: -1 | 1): number | null {
   if (direction === 1) {
     for (const cue of cues) if (cue.start > time + EPSILON_S) return cue.start;
     return null;
   }
+
+  let onScreen: Cue | undefined;
+  let lastStarted: Cue | undefined;
+  for (const cue of cues) {
+    if (cue.start > time) break;
+    lastStarted = cue;
+    if (time < cue.end && (onScreen === undefined || cue.start < onScreen.start)) onScreen = cue;
+  }
+  if (onScreen === undefined) return lastStarted?.start ?? null;
+
   let target: number | null = null;
   for (const cue of cues) {
-    if (cue.start >= time - RESTART_WINDOW_S) break;
+    if (cue.start >= onScreen.start - EPSILON_S) break;
     target = cue.start;
   }
   return target;

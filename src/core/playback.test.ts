@@ -17,10 +17,13 @@ test('next goes to the first line starting after the playhead', () => {
   assert.equal(cueStepTarget(cues, 30, 1), null);
 });
 
-test('previous restarts the current line, or skips back when it just started', () => {
-  assert.equal(cueStepTarget(cues, 17, -1), 15);
+test('previous goes to the line before the one on screen, whatever its progress', () => {
+  assert.equal(cueStepTarget(cues, 17, -1), 10);
+  assert.equal(cueStepTarget(cues, 15, -1), 10);
   assert.equal(cueStepTarget(cues, 15.5, -1), 10);
   assert.equal(cueStepTarget(cues, 10.5, -1), null);
+  assert.equal(cueStepTarget(cues, 13, -1), 10);
+  assert.equal(cueStepTarget(cues, 19, -1), 15);
   assert.equal(cueStepTarget([], 10, -1), null);
 });
 
