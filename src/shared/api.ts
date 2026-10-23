@@ -169,8 +169,11 @@ export const MAX_LOOKUP_LENGTH = 64;
 /** A dictionary entry reduced to what the lookup panel shows. */
 export interface TermEntry {
   headwords: { term: string; reading: string }[];
-  /** Deinflection steps from the looked-up text to the headword, e.g. ["causative", "-た"]. */
-  inflections: string[];
+  /**
+   * Deinflection steps from the looked-up text to the headword, e.g. causative
+   * then -た. `description` is Yomitan's explanation of the rule, when it has one.
+   */
+  inflections: { name: string; description?: string }[];
   frequencies: { dictionary: string; value: string }[];
   /** Downstep positions from pitch-accent dictionaries. */
   pitches: number[];

@@ -65,7 +65,7 @@ export function createPanelView(els: PanelElements, dispatch: Dispatch) {
     // Links inside definitions only exist to be looked up; following them would leave the page.
     if (event.target instanceof Element && event.target.closest('a')) event.preventDefault();
     if (!(event.target instanceof Element)) return;
-    if (event.target.closest('button, summary, a')) return;
+    if (event.target.closest('button, summary, a, .inflection')) return;
     const caret = document.caretRangeFromPoint;
     const range = typeof caret === 'function' ? caret.call(document, event.clientX, event.clientY) : null;
     if (range === null) return;
@@ -221,11 +221,11 @@ function renderEntry(
   box.append(audioMenu);
 
   const tags = el('div', 'entry-tags');
-  if (entry.inflections.length > 0) {
-    tags.append(el('span', 'chip', `« ${entry.inflections.join(' « ')}`));
-  }
+  const note = inflectionNote();
+  if (entry.inflections.length > 0) tags.append(inflectionChain(entry.inflections, note));
   for (const frequency of entry.frequencies) tags.append(frequencyTag(frequency));
   if (tags.childElementCount > 0) box.append(tags);
+  if (entry.inflections.some((rule) => rule.description !== undefined)) box.append(note.node);
 
   for (const accent of entry.pitchAccents) box.append(pitchRow(accent));
 
@@ -249,6 +249,46 @@ function renderEntry(
       audioMenuKey: '',
     },
   };
+}
+
+interface InflectionNote {
+  node: HTMLElement;
+  /** Index of the rule whose explanation is open, or null. */
+  open: number | null;
+}
+
+function inflectionNote(): InflectionNote {
+  const node = el('div', 'inflection-note');
+  node.hidden = true;
+  return { node, open: null };
+}
+
+/**
+ * Deinflection steps, in Yomitan's chain order. Yomitan keeps each rule's
+ * explanation on its tag and shows it when tapped, so a rule name is only a
+ * button when there is an explanation to show.
+ */
+function inflectionChain(rules: TermEntry['inflections'], note: InflectionNote): HTMLElement {
+  const chain = el('span', 'inflection');
+  for (const [index, rule] of rules.entries()) {
+    chain.append(document.createTextNode('«'));
+    const { description } = rule;
+    if (description === undefined) {
+      chain.append(el('span', 'chip', rule.name));
+      continue;
+    }
+    const name = el('button', 'chip inflection-name', rule.name);
+    name.type = 'button';
+    name.title = description;
+    name.addEventListener('click', () => {
+      const open = note.open !== index;
+      note.open = open ? index : null;
+      note.node.hidden = !open;
+      if (open) note.node.textContent = description;
+    });
+    chain.append(name);
+  }
+  return chain;
 }
 
 /** The headword with furigana over its kanji, or one ruby over the whole term. */

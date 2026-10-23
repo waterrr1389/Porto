@@ -608,7 +608,7 @@ test('the end of an episode saves progress and hints at the next one without aut
 
 const termEntry: TermEntry = {
   headwords: [{ term: '日本語', reading: 'にほんご' }],
-  inflections: ['-た'],
+  inflections: [{ name: '-た', description: '-た form ending' }],
   frequencies: [{ dictionary: 'JPDB', value: '900' }],
   pitches: [1],
   pitchAccents: [{ dictionary: 'アクセント辞典', reading: 'にほんご', positions: [0] }],

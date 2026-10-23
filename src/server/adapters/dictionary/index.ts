@@ -110,7 +110,7 @@ export async function importDictionaries(databasePath: string, files: string[]):
 
 interface YomitanEntry {
   headwords: { term: string; reading: string }[];
-  inflectionRuleChainCandidates?: { inflectionRules: { name: string }[] }[];
+  inflectionRuleChainCandidates?: { inflectionRules: { name: string; description?: string }[] }[];
   frequencies?: {
     dictionary: string;
     dictionaryAlias?: string;
@@ -201,7 +201,10 @@ function toTermEntry(entry: YomitanEntry, priority: readonly string[]): TermEntr
 
   return {
     headwords: entry.headwords.map(({ term, reading }) => ({ term, reading })),
-    inflections: entry.inflectionRuleChainCandidates?.[0]?.inflectionRules.map((rule) => rule.name) ?? [],
+    inflections:
+      entry.inflectionRuleChainCandidates?.[0]?.inflectionRules.map((rule) =>
+        rule.description ? { name: rule.name, description: rule.description } : { name: rule.name },
+      ) ?? [],
     frequencies,
     pitches: pitchAccents.flatMap((accent) => accent.positions),
     pitchAccents,

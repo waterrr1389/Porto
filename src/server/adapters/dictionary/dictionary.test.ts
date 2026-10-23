@@ -81,6 +81,7 @@ test('deinflects and reports the matched length', async () => {
   const [entry] = result.entries;
   assert.deepEqual(entry?.headwords, [{ term: '食べる', reading: 'たべる' }]);
   assert.ok((entry?.inflections.length ?? 0) > 0);
+  assert.ok(entry?.inflections.some((rule) => rule.description?.includes('連用形')));
   assert.deepEqual(entry?.definitions, [{ dictionary: 'Fixture', glossary: [{ type: 'text', text: 'to eat' }] }]);
 });
 
